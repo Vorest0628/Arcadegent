@@ -1,0 +1,14 @@
+tool_policies:
+  db_query_tool:
+    read_only: true
+    concurrency_safe: true
+  geo_resolve_tool:
+    read_only: true
+    concurrency_safe: true
+  route_plan_tool:
+    read_only: true
+    concurrency_safe: true
+  summary_tool:
+    read_only: true
+    concurrency_safe: true
+

@@ -1,0 +1,9 @@
+id: summary
+description: Summary node for natural-language response generation.
+provider: template
+model_pointer: task
+allowed_tools:
+  - summary_tool
+output_schema:
+  reply: string
+

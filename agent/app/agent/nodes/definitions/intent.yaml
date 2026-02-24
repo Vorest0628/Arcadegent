@@ -1,0 +1,9 @@
+id: intent
+description: Intent classifier node for search and navigation tasks.
+provider: rule_based
+model_pointer: main
+allowed_tools: []
+output_schema:
+  intent: [search, search_nearby, navigate]
+  confidence: float
+

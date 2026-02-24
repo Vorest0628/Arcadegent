@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Virtual env / tooling
+.venv/
+.pydeps/
+.playwright-browsers/
+
+# Frontend
+apps/web/node_modules/
+apps/web/dist/
+
+# Runtime outputs
+data/
+
+docs/
+# IDEs
+.vscode/
+.idea/
+.qoder
+
+scripts/
+
+.runtime_smoke/
+.tmp_pytest/

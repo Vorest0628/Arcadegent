@@ -1,0 +1,11 @@
+profiles:
+  local:
+    description: Local deterministic profile without external LLM/provider calls.
+    timeout_seconds: 3
+  rule_based:
+    description: Lightweight intent rules.
+    timeout_seconds: 1
+  template:
+    description: Template summarization.
+    timeout_seconds: 1
+

@@ -1,0 +1,10 @@
+id: navigation
+description: Navigation node with provider selection and route planning.
+provider: local
+model_pointer: navigation
+allowed_tools:
+  - geo_resolve_tool
+  - route_plan_tool
+output_schema:
+  route: object
+
