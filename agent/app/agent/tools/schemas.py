@@ -69,7 +69,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "geo_resolve_tool": "Resolve map provider by province code.",
     "route_plan_tool": "Plan a route from origin to destination.",
     "summary_tool": "Generate concise text summary for search or navigation context.",
-    "select_next_subagent": "Select next subagent stage according to intent and tool outcomes.",
+    "select_next_subagent": "Emit a compatibility hint for next subagent candidate; runtime policy decides final route.",
 }
 
 
@@ -92,4 +92,3 @@ def build_tool_definitions(tool_names: list[str], *, strict: bool) -> list[dict[
             }
         )
     return definitions
-

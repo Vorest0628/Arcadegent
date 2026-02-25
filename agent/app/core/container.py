@@ -66,10 +66,11 @@ def build_container(settings: Settings) -> AppContainer:
         prompt_root=project_root / "agent" / "context" / "prompts",
         history_turn_limit=settings.agent_context_window,
     )
-    subagent_builder = SubAgentBuilder()
-    permission_checker = ToolPermissionChecker(
-        policy_file=project_root / "agent" / "nodes" / "profiles" / "tool_policies.yaml"
+    subagent_builder = SubAgentBuilder(
+        definitions_dir=settings.agent_nodes_definitions_dir,
+        enable_yaml_overlay=settings.agent_subagent_yaml_overlay_enabled,
     )
+    permission_checker = ToolPermissionChecker(policy_file=settings.agent_tool_policy_file)
     tool_registry = ToolRegistry(
         db_query_tool=db_query_tool,
         geo_resolve_tool=GeoResolveTool(),

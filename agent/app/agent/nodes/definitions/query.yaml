@@ -1,10 +1,15 @@
 id: query
+status: active
+subagent_name: search_agent
+prompt_file: search_agent.md
 description: Query node for DB search/list/detail retrieval.
 provider: local
 model_pointer: task
+allowed_tools_mode: replace
 allowed_tools:
   - db_query_tool
+  - summary_tool
+  - select_next_subagent
 output_schema:
   shops: list
   total: int
-

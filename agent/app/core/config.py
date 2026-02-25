@@ -51,6 +51,11 @@ class Settings:
     llm_max_tokens: int = 500
     agent_max_steps: int = 6
     agent_context_window: int = 24
+    agent_nodes_definitions_dir: Path = Path("app/agent/nodes/definitions")
+    agent_tool_policy_file: Path = Path("app/agent/nodes/profiles/tool_policies.yaml")
+    agent_subagent_yaml_overlay_enabled: bool = True
+    agent_provider_profiles_file: Path = Path("app/agent/nodes/profiles/provider_profiles.yaml")
+    agent_provider_profile: str = "default"
     amap_api_key: str = ""
     amap_base_url: str = "https://restapi.amap.com"
     amap_timeout_seconds: float = 8.0
@@ -94,6 +99,29 @@ class Settings:
             ),
             agent_context_window=int(
                 os.getenv("AGENT_CONTEXT_WINDOW", str(cls.agent_context_window))
+            ),
+            agent_nodes_definitions_dir=_resolve_path(
+                os.getenv(
+                    "AGENT_NODES_DEFINITIONS_DIR",
+                    str(cls.agent_nodes_definitions_dir),
+                )
+            ),
+            agent_tool_policy_file=_resolve_path(
+                os.getenv("AGENT_TOOL_POLICY_FILE", str(cls.agent_tool_policy_file))
+            ),
+            agent_subagent_yaml_overlay_enabled=_env_bool(
+                "AGENT_SUBAGENT_YAML_OVERLAY_ENABLED",
+                cls.agent_subagent_yaml_overlay_enabled,
+            ),
+            agent_provider_profiles_file=_resolve_path(
+                os.getenv(
+                    "AGENT_PROVIDER_PROFILES_FILE",
+                    str(cls.agent_provider_profiles_file),
+                )
+            ),
+            agent_provider_profile=os.getenv(
+                "AGENT_PROVIDER_PROFILE",
+                cls.agent_provider_profile,
             ),
             amap_api_key=os.getenv("AMAP_API_KEY", cls.amap_api_key),
             amap_base_url=os.getenv("AMAP_BASE_URL", cls.amap_base_url),

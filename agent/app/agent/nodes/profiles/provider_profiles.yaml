@@ -1,11 +1,28 @@
 profiles:
+  default:
+    description: OpenAI-compatible default profile for normal runtime.
+    model: gpt-4o-mini
+    timeout_seconds: 20
+    temperature: 0.2
+    max_tokens: 500
+    tool_choice: auto
+    parallel_tool_calls: false
+    enabled: true
   local:
     description: Local deterministic profile without external LLM/provider calls.
+    enabled: false
     timeout_seconds: 3
+    tool_choice: auto
+    parallel_tool_calls: false
   rule_based:
     description: Lightweight intent rules.
+    enabled: false
     timeout_seconds: 1
+    tool_choice: auto
+    parallel_tool_calls: false
   template:
     description: Template summarization.
+    enabled: false
     timeout_seconds: 1
-
+    tool_choice: auto
+    parallel_tool_calls: false

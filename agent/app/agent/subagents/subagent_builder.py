@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from pathlib import Path
+from typing import Any, Literal, cast
+
+import yaml
 
 from app.protocol.messages import IntentType
 
@@ -22,7 +25,12 @@ class SubAgentProfile:
 class SubAgentBuilder:
     """Resolve subagent profiles by name and routing hints."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        definitions_dir: Path | None = None,
+        enable_yaml_overlay: bool = True,
+    ) -> None:
         self._profiles: dict[str, SubAgentProfile] = {
             "intent_router": SubAgentProfile(
                 name="intent_router",
@@ -51,6 +59,8 @@ class SubAgentBuilder:
                 allowed_tools=["summary_tool"],
             ),
         }
+        if enable_yaml_overlay and definitions_dir is not None:
+            self._apply_yaml_overlay(definitions_dir)
 
     def get(self, name: str) -> SubAgentProfile:
         return self._profiles.get(name, self._profiles["intent_router"])
@@ -60,3 +70,110 @@ class SubAgentBuilder:
             return "navigation_agent"
         return "search_agent"
 
+    def _apply_yaml_overlay(self, definitions_dir: Path) -> None:
+        mapping: dict[str, SubAgentName] = {
+            "intent": "intent_router",
+            "query": "search_agent",
+            "navigation": "navigation_agent",
+            "summary": "summary_agent",
+        }
+        if not definitions_dir.exists():
+            return
+        for path in sorted(definitions_dir.glob("*.yaml")):
+            payload = self._read_yaml(path)
+            if payload is None:
+                continue
+            status = self._read_status(payload)
+            if status != "active":
+                continue
+            subagent_name = self._read_subagent_name(payload, mapping=mapping)
+            if subagent_name is None:
+                continue
+
+            profile = self._profiles[subagent_name]
+            prompt_file = self._read_prompt_file(payload, fallback=profile.prompt_file)
+            overlay_tools = self._read_allowed_tools(payload)
+            allowed_tools_mode = self._read_allowed_tools_mode(payload)
+            if allowed_tools_mode == "replace" and overlay_tools:
+                allowed_tools = overlay_tools
+            else:
+                allowed_tools = self._merge_unique(profile.allowed_tools, overlay_tools)
+            self._profiles[subagent_name] = SubAgentProfile(
+                name=profile.name,
+                prompt_file=prompt_file,
+                allowed_tools=allowed_tools,
+            )
+
+    def _read_yaml(self, path: Path) -> dict[str, Any] | None:
+        if not path.exists():
+            return None
+        try:
+            raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError):
+            return None
+        if not isinstance(raw, dict):
+            return None
+        return raw
+
+    def _read_prompt_file(self, payload: dict[str, Any], *, fallback: str) -> str:
+        raw = payload.get("prompt_file")
+        if not isinstance(raw, str):
+            return fallback
+        value = raw.strip()
+        return value or fallback
+
+    def _read_status(self, payload: dict[str, Any]) -> str:
+        raw = payload.get("status")
+        if not isinstance(raw, str):
+            return "active"
+        value = raw.strip().lower()
+        if value in {"active", "planned"}:
+            return value
+        return "active"
+
+    def _read_subagent_name(
+        self,
+        payload: dict[str, Any],
+        *,
+        mapping: dict[str, SubAgentName],
+    ) -> SubAgentName | None:
+        raw_name = payload.get("subagent_name")
+        if isinstance(raw_name, str):
+            normalized = raw_name.strip()
+            if normalized in self._profiles:
+                return cast(SubAgentName, normalized)
+
+        raw_id = payload.get("id")
+        if isinstance(raw_id, str):
+            mapped = mapping.get(raw_id.strip())
+            if mapped is not None:
+                return mapped
+        return None
+
+    def _read_allowed_tools_mode(self, payload: dict[str, Any]) -> str:
+        raw = payload.get("allowed_tools_mode")
+        if not isinstance(raw, str):
+            return "merge"
+        value = raw.strip().lower()
+        if value in {"merge", "replace"}:
+            return value
+        return "merge"
+
+    def _read_allowed_tools(self, payload: dict[str, Any]) -> list[str]:
+        raw = payload.get("allowed_tools")
+        if not isinstance(raw, list):
+            return []
+        tools: list[str] = []
+        for item in raw:
+            if isinstance(item, str):
+                value = item.strip()
+                if value:
+                    tools.append(value)
+        return tools
+
+    def _merge_unique(self, base: list[str], overlay: list[str]) -> list[str]:
+        merged: list[str] = []
+        for item in [*base, *overlay]:
+            if item not in merged:
+                merged.append(item)
+        return merged

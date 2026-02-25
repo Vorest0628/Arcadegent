@@ -25,3 +25,4 @@ scripts/
 
 .runtime_smoke/
 .tmp_pytest/
+.tmp_pytest_run/

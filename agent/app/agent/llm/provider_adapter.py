@@ -1,16 +1,14 @@
-"""Provider adapter with responses/chat-completions dual stack and offline planner."""
+"""Provider adapter with Responses/Chat Completions dual-stack fallback."""
 
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass, field
 from typing import Any
 from urllib import error, request
 from uuid import uuid4
 
 from app.agent.llm.llm_config import LLMConfig
-from app.protocol.messages import IntentType
 
 
 def _safe_json_loads(raw: str | bytes | None) -> dict[str, Any]:
@@ -22,55 +20,9 @@ def _safe_json_loads(raw: str | bytes | None) -> dict[str, Any]:
         return {}
 
 
-def _infer_intent(message: str) -> IntentType:
-    text = message.strip().lower()
-    if re.search(r"\u5bfc\u822a|\u8def\u7ebf|\u600e\u4e48\u53bb|how to go|route|go to", text):
-        return "navigate"
-    if re.search(r"\u9644\u8fd1|nearby|near", text):
-        return "search_nearby"
-    return "search"
-
-
-def _looks_like_followup(message: str) -> bool:
-    text = message.strip().lower()
-    if not text:
-        return False
-    followup_patterns = (
-        r"\u7ee7\u7eed",
-        r"\u518d(\u8bf4|\u603b\u7ed3|\u7ed9)",
-        r"\u4e0a\u6b21",
-        r"\u524d\u9762",
-        r"\u7ee7\u7eed\u4e00\u4e0b",
-        r"continue",
-        r"follow up",
-    )
-    return any(re.search(pattern, text) for pattern in followup_patterns)
-
-
-def _extract_keyword(message: str) -> str:
-    text = message.strip()
-    if not text:
-        return ""
-    latin_matches = re.findall(r"[A-Za-z0-9][A-Za-z0-9 _-]{0,40}", text)
-    if latin_matches:
-        candidate = latin_matches[-1].strip()
-        if " " in candidate:
-            pieces = [item for item in re.split(r"\s+", candidate) if item]
-            if pieces:
-                candidate = pieces[-1]
-        return candidate
-    cleaned = re.sub(
-        r"(\u5e2e\u6211\u627e|\u8bf7\u5e2e\u6211\u627e|\u5e2e\u5fd9\u627e|\u9644\u8fd1\u54ea\u91cc\u6709|\u9644\u8fd1\u6709\u6ca1\u6709|\u6709\u6ca1\u6709|\u627e\u4e00\u4e0b|\u67e5\u4e00\u4e0b|\u641c\u7d22|\u67e5\u8be2|\u673a\u5385)",
-        " ",
-        text,
-    )
-    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.!?\uFF0C\u3002\uFF01\uFF1F")
-    return cleaned or text
-
-
 @dataclass(frozen=True)
 class ModelToolCall:
-    """Normalized function call emitted by model/offline planner."""
+    """Normalized function call emitted by provider model."""
 
     call_id: str
     name: str
@@ -105,11 +57,13 @@ class ProviderAdapter:
         tools: list[dict[str, Any]],
         runtime_hints: dict[str, Any] | None = None,
     ) -> ModelResponse:
-        hints = runtime_hints or {}
-        if not self.enabled:
-            return self._offline_complete(tools=tools, runtime_hints=hints)
+        # Keep arg for compatibility with caller signature.
+        _ = runtime_hints
 
-        by_responses = self._try_responses_api(
+        if not self.enabled:
+            return self._error_response("llm provider disabled: missing api key")
+
+        by_responses, responses_error = self._try_responses_api(
             instructions=instructions,
             messages=messages,
             tools=tools,
@@ -117,7 +71,7 @@ class ProviderAdapter:
         if by_responses is not None:
             return by_responses
 
-        by_chat = self._try_chat_completions(
+        by_chat, chat_error = self._try_chat_completions(
             instructions=instructions,
             messages=messages,
             tools=tools,
@@ -125,9 +79,18 @@ class ProviderAdapter:
         if by_chat is not None:
             return by_chat
 
-        return self._offline_complete(tools=tools, runtime_hints=hints)
+        return self._error_response(
+            "llm provider failed after trying responses and chat completions; "
+            f"responses_error={self._format_error(responses_error)}; "
+            f"chat_completions_error={self._format_error(chat_error)}"
+        )
 
-    def _post_json(self, *, endpoint: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+    def _post_json(
+        self,
+        *,
+        endpoint: str,
+        payload: dict[str, Any],
+    ) -> tuple[dict[str, Any] | None, str | None]:
         body = json.dumps(payload).encode("utf-8")
         req = request.Request(
             endpoint,
@@ -140,9 +103,26 @@ class ProviderAdapter:
         )
         try:
             with request.urlopen(req, timeout=self._config.timeout_seconds) as resp:
-                return _safe_json_loads(resp.read().decode("utf-8", errors="replace"))
-        except (error.URLError, error.HTTPError, TimeoutError):
-            return None
+                decoded = _safe_json_loads(resp.read().decode("utf-8", errors="replace"))
+                if not isinstance(decoded, dict):
+                    return None, "response body is not a JSON object"
+                return decoded, None
+        except error.HTTPError as exc:
+            details = ""
+            try:
+                raw = exc.read()
+                if raw:
+                    details = " ".join(raw.decode("utf-8", errors="replace").split())
+            except Exception:
+                details = ""
+            suffix = f"; body={details[:280]}" if details else ""
+            return None, f"http_error status={exc.code} reason={exc.reason}{suffix}"
+        except error.URLError as exc:
+            return None, f"url_error reason={exc.reason}"
+        except TimeoutError:
+            return None, "timeout_error request timed out"
+        except Exception as exc:  # pragma: no cover
+            return None, f"unexpected_error {type(exc).__name__}: {exc}"
 
     def _try_responses_api(
         self,
@@ -150,7 +130,7 @@ class ProviderAdapter:
         instructions: str,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
-    ) -> ModelResponse | None:
+    ) -> tuple[ModelResponse | None, str | None]:
         endpoint = self._config.base_url.rstrip("/") + "/responses"
         payload: dict[str, Any] = {
             "model": self._config.model,
@@ -164,9 +144,9 @@ class ProviderAdapter:
         if tools:
             payload["tools"] = [self._to_responses_tool(tool) for tool in tools]
 
-        decoded = self._post_json(endpoint=endpoint, payload=payload)
+        decoded, request_error = self._post_json(endpoint=endpoint, payload=payload)
         if not isinstance(decoded, dict):
-            return None
+            return None, request_error or "responses api returned no data"
 
         tool_calls: list[ModelToolCall] = []
         reasoning: list[dict[str, Any]] = []
@@ -200,14 +180,17 @@ class ProviderAdapter:
 
         text = "\n".join(chunk for chunk in text_chunks if chunk).strip() or None
         if text is None and not tool_calls and not reasoning:
-            return None
+            return None, "responses api returned no text, tool_calls, or reasoning"
 
         response_id = decoded.get("id")
-        return ModelResponse(
-            text=text,
-            tool_calls=tool_calls,
-            reasoning_items=reasoning,
-            response_id=str(response_id) if response_id is not None else None,
+        return (
+            ModelResponse(
+                text=text,
+                tool_calls=tool_calls,
+                reasoning_items=reasoning,
+                response_id=str(response_id) if response_id is not None else None,
+            ),
+            None,
         )
 
     def _to_responses_tool(self, tool: dict[str, Any]) -> dict[str, Any]:
@@ -255,7 +238,7 @@ class ProviderAdapter:
         instructions: str,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
-    ) -> ModelResponse | None:
+    ) -> tuple[ModelResponse | None, str | None]:
         endpoint = self._config.base_url.rstrip("/") + "/chat/completions"
         payload: dict[str, Any] = {
             "model": self._config.model,
@@ -268,16 +251,18 @@ class ProviderAdapter:
         if tools:
             payload["tools"] = tools
 
-        decoded = self._post_json(endpoint=endpoint, payload=payload)
+        decoded, request_error = self._post_json(endpoint=endpoint, payload=payload)
         if not isinstance(decoded, dict):
-            return None
+            return None, request_error or "chat completions api returned no data"
+
         choices = decoded.get("choices")
         if not isinstance(choices, list) or not choices:
-            return None
+            return None, "chat completions api returned empty choices"
+
         first = choices[0] if isinstance(choices[0], dict) else {}
         message = first.get("message") if isinstance(first, dict) else None
         if not isinstance(message, dict):
-            return None
+            return None, "chat completions api returned invalid message payload"
 
         text = self._extract_chat_text(message.get("content"))
         tool_calls: list[ModelToolCall] = []
@@ -289,8 +274,8 @@ class ProviderAdapter:
                     tool_calls.append(parsed)
 
         if text is None and not tool_calls:
-            return None
-        return ModelResponse(text=text, tool_calls=tool_calls, reasoning_items=[])
+            return None, "chat completions api returned no text or tool_calls"
+        return ModelResponse(text=text, tool_calls=tool_calls, reasoning_items=[]), None
 
     def _extract_chat_text(self, raw_content: Any) -> str | None:
         if isinstance(raw_content, str):
@@ -330,189 +315,13 @@ class ProviderAdapter:
             args = {}
         return ModelToolCall(call_id=str(call_id), name=name, arguments=args)
 
-    def _offline_complete(
-        self,
-        *,
-        tools: list[dict[str, Any]],
-        runtime_hints: dict[str, Any],
-    ) -> ModelResponse:
-        request_payload = runtime_hints.get("request")
-        request_data = request_payload if isinstance(request_payload, dict) else {}
-        memory_payload = runtime_hints.get("memory")
-        memory = memory_payload if isinstance(memory_payload, dict) else {}
-        message = str(request_data.get("message") or "")
-        intent = str(runtime_hints.get("intent") or _infer_intent(message))
-        active_subagent = str(runtime_hints.get("active_subagent") or "intent_router")
+    def _error_response(self, message: str) -> ModelResponse:
+        return ModelResponse(text=f"error: {message}", tool_calls=[], reasoning_items=[])
 
-        available_tools = self._tool_name_set(tools)
-        if active_subagent == "intent_router" and "select_next_subagent" in available_tools:
-            return self._single_tool_call(
-                name="select_next_subagent",
-                arguments={
-                    "current_subagent": "intent_router",
-                    "intent": intent,
-                    "tool_name": None,
-                    "tool_status": "completed",
-                    "has_route": bool(memory.get("route")),
-                    "has_shops": bool(memory.get("shops")),
-                },
-            )
-
-        if active_subagent == "search_agent":
-            if (
-                "summary_tool" in available_tools
-                and bool(memory.get("shops"))
-                and _looks_like_followup(message)
-            ):
-                return self._single_tool_call(
-                    name="summary_tool",
-                    arguments={
-                        "topic": "search",
-                        "keyword": memory.get("keyword"),
-                        "total": memory.get("total"),
-                        "shops": memory.get("shops"),
-                        "shop_name": None,
-                        "route": None,
-                    },
-                )
-            if "db_query_tool" in available_tools:
-                return self._single_tool_call(
-                    name="db_query_tool",
-                    arguments={
-                        "keyword": request_data.get("keyword") or _extract_keyword(message),
-                        "province_code": request_data.get("province_code"),
-                        "city_code": request_data.get("city_code"),
-                        "county_code": request_data.get("county_code"),
-                        "has_arcades": True if intent == "search_nearby" else None,
-                        "page": 1,
-                        "page_size": int(request_data.get("page_size") or 5),
-                        "shop_id": None,
-                    },
-                )
-            if "summary_tool" in available_tools:
-                return self._single_tool_call(
-                    name="summary_tool",
-                    arguments={
-                        "topic": "search",
-                        "keyword": request_data.get("keyword") or _extract_keyword(message),
-                        "total": memory.get("total"),
-                        "shops": memory.get("shops"),
-                        "shop_name": None,
-                        "route": None,
-                    },
-                )
-
-        if active_subagent == "navigation_agent":
-            if "db_query_tool" in available_tools and request_data.get("shop_id") is not None and not memory.get("shop"):
-                return self._single_tool_call(
-                    name="db_query_tool",
-                    arguments={
-                        "keyword": None,
-                        "province_code": None,
-                        "city_code": None,
-                        "county_code": None,
-                        "has_arcades": None,
-                        "page": 1,
-                        "page_size": 1,
-                        "shop_id": int(request_data["shop_id"]),
-                    },
-                )
-            if "geo_resolve_tool" in available_tools and not memory.get("provider"):
-                shop = memory.get("shop") if isinstance(memory.get("shop"), dict) else {}
-                return self._single_tool_call(
-                    name="geo_resolve_tool",
-                    arguments={
-                        "province_code": shop.get("province_code") or request_data.get("province_code"),
-                    },
-                )
-            if "route_plan_tool" in available_tools and not memory.get("route"):
-                shop = memory.get("shop") if isinstance(memory.get("shop"), dict) else {}
-                location = request_data.get("location")
-                origin = location if isinstance(location, dict) else {"lng": 116.397428, "lat": 39.90923}
-                lng = shop.get("longitude_wgs84") or shop.get("longitude_gcj02") or origin.get("lng")
-                lat = shop.get("latitude_wgs84") or shop.get("latitude_gcj02") or origin.get("lat")
-                return self._single_tool_call(
-                    name="route_plan_tool",
-                    arguments={
-                        "provider": memory.get("provider") or "none",
-                        "mode": "walking",
-                        "origin": {"lng": float(origin["lng"]), "lat": float(origin["lat"])},
-                        "destination": {"lng": float(lng), "lat": float(lat)},
-                    },
-                )
-            if "summary_tool" in available_tools and memory.get("route"):
-                shop = memory.get("shop") if isinstance(memory.get("shop"), dict) else {}
-                return self._single_tool_call(
-                    name="summary_tool",
-                    arguments={
-                        "topic": "navigation",
-                        "keyword": None,
-                        "total": None,
-                        "shops": None,
-                        "shop_name": shop.get("name") or "target arcade",
-                        "route": memory.get("route"),
-                    },
-                )
-
-            return ModelResponse(
-                text="navigation requires `shop_id`; select a destination and retry.",
-                tool_calls=[],
-                reasoning_items=[],
-            )
-
-        if active_subagent == "summary_agent":
-            existing_reply = memory.get("reply")
-            if isinstance(existing_reply, str) and existing_reply.strip():
-                return ModelResponse(text=existing_reply.strip(), tool_calls=[], reasoning_items=[])
-            if "summary_tool" in available_tools:
-                if intent == "navigate":
-                    shop = memory.get("shop") if isinstance(memory.get("shop"), dict) else {}
-                    return self._single_tool_call(
-                        name="summary_tool",
-                        arguments={
-                            "topic": "navigation",
-                            "keyword": None,
-                            "total": None,
-                            "shops": None,
-                            "shop_name": shop.get("name") or "target arcade",
-                            "route": memory.get("route"),
-                        },
-                    )
-                return self._single_tool_call(
-                    name="summary_tool",
-                    arguments={
-                        "topic": "search",
-                        "keyword": memory.get("keyword"),
-                        "total": memory.get("total"),
-                        "shops": memory.get("shops"),
-                        "shop_name": None,
-                        "route": None,
-                    },
-                )
-
-        return ModelResponse(text=None, tool_calls=[], reasoning_items=[])
-
-    def _single_tool_call(self, *, name: str, arguments: dict[str, Any]) -> ModelResponse:
-        return ModelResponse(
-            text=None,
-            tool_calls=[
-                ModelToolCall(
-                    call_id=f"offline_{uuid4().hex[:12]}",
-                    name=name,
-                    arguments=arguments,
-                )
-            ],
-            reasoning_items=[],
-        )
-
-    def _tool_name_set(self, tools: list[dict[str, Any]]) -> set[str]:
-        names: set[str] = set()
-        for tool in tools:
-            if not isinstance(tool, dict):
-                continue
-            function_obj = tool.get("function")
-            if isinstance(function_obj, dict):
-                name = function_obj.get("name")
-                if isinstance(name, str) and name:
-                    names.add(name)
-        return names
+    def _format_error(self, value: str | None) -> str:
+        if not value:
+            return "unknown"
+        compact = " ".join(value.split())
+        if len(compact) <= 280:
+            return compact
+        return compact[:277] + "..."

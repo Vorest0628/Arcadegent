@@ -59,6 +59,7 @@ class ContextBuilder:
         messages = [self._to_model_message(turn) for turn in self._tail_turns(session_state.turns)]
         return BuiltContext(instructions=instructions, messages=messages)
 
+    """返回最近的历史对话，限制在history_turn_limit之内"""
     def _tail_turns(self, turns: list[AgentTurn]) -> list[AgentTurn]:
         if len(turns) <= self._history_turn_limit:
             return turns

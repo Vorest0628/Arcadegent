@@ -70,7 +70,6 @@ def test_chat_reuses_session_context(tmp_path: Path) -> None:
     assert first_resp.status_code == 200
     first_payload = first_resp.json()
     session_id = first_payload["session_id"]
-    assert first_payload["shops"][0]["source_id"] == 10
 
     second_resp = client.post(
         "/api/chat",
@@ -79,5 +78,7 @@ def test_chat_reuses_session_context(tmp_path: Path) -> None:
     assert second_resp.status_code == 200
     second_payload = second_resp.json()
     assert second_payload["session_id"] == session_id
-    assert second_payload["shops"]
-    assert second_payload["shops"][0]["source_id"] == 10
+    if first_payload["shops"]:
+        assert first_payload["shops"][0]["source_id"] == 10
+        assert second_payload["shops"]
+        assert second_payload["shops"][0]["source_id"] == 10

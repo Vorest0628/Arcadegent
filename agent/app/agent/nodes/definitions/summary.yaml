@@ -1,9 +1,12 @@
 id: summary
+status: active
+subagent_name: summary_agent
+prompt_file: summary_agent.md
 description: Summary node for natural-language response generation.
 provider: template
 model_pointer: task
+allowed_tools_mode: replace
 allowed_tools:
   - summary_tool
 output_schema:
   reply: string
-

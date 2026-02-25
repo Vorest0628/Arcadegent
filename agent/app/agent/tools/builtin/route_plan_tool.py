@@ -11,6 +11,7 @@ from app.protocol.messages import Location, ProviderType, RouteSummaryDto
 
 
 def _haversine_meters(a: Location, b: Location) -> float:
+    """计算两点间的直线距离（米）"""
     radius_m = 6371000.0
     lat1 = math.radians(a.lat)
     lat2 = math.radians(b.lat)
@@ -29,8 +30,8 @@ class AMapConfig:
     base_url: str
     timeout_seconds: float
 
-
 def _parse_polyline(polyline: str) -> list[Location]:
+    """解析高德地图API返回的polyline字符串为坐标列表。"""
     result: list[Location] = []
     if not polyline:
         return result
@@ -63,6 +64,7 @@ class RoutePlanTool:
         origin: Location,
         destination: Location,
     ) -> RouteSummaryDto | None:
+        """用高德地图API规划路线，失败时返回None以触发离线估算。"""
         if not self._amap_config or not self._amap_config.api_key.strip():
             return None
 
@@ -128,6 +130,7 @@ class RoutePlanTool:
         origin: Location,
         destination: Location,
     ) -> RouteSummaryDto:
+        """规划路线，优先使用高德地图API，失败时返回离线估算结果。"""
         amap_result = None
         if provider == "amap":
             amap_result = self._plan_with_amap(

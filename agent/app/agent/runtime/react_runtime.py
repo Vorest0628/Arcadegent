@@ -24,6 +24,7 @@ from app.protocol.messages import (
 
 
 def _infer_intent(message: str) -> IntentType:
+    """Fallback intent inference aligned with provider adapter behavior."""
     text = message.strip().lower()
     if re.search(r"\u5bfc\u822a|\u8def\u7ebf|\u600e\u4e48\u53bb|how to go|route|go to", text):
         return "navigate"
@@ -41,6 +42,7 @@ def _normalize_intent(raw: str | None) -> IntentType:
 
 
 def _extract_keyword(message: str) -> str:
+    # Extract a usable DB keyword from user message.
     text = message.strip()
     if not text:
         return ""
@@ -62,6 +64,7 @@ def _extract_keyword(message: str) -> str:
 
 
 def _summary_row(raw: dict) -> ArcadeShopSummaryDto:
+    """Map internal shop payload to API summary DTO."""
     return ArcadeShopSummaryDto(
         source=str(raw.get("source") or ""),
         source_id=int(raw.get("source_id") or 0),
@@ -115,6 +118,7 @@ class ReactRuntime:
         self._max_steps = max(2, max_steps)
 
     def run_chat(self, request: ChatRequest) -> ChatResponse:
+        """Session-aware chat execution with multi-turn tool loop."""
         session_id = request.session_id or f"s_{uuid4().hex[:12]}"
         state = self._session_store.get_or_create(session_id)
         state.turn_index += 1
@@ -158,6 +162,7 @@ class ReactRuntime:
 
         guard = LoopGuard(self._max_steps)
         final_text: str | None = None
+        # ReAct loop: context -> model -> tools -> memory -> next turn.
         while not guard.exhausted:
             guard.next()
             subagent = self._subagent_builder.get(state.active_subagent)
@@ -223,6 +228,7 @@ class ReactRuntime:
         tool_calls: list[ModelToolCall],
         allowed_tools: list[str],
     ) -> bool:
+        """Execute tool calls sequentially and return terminal flag."""
         terminal = False
         for call in tool_calls:
             self._replay_buffer.append(
@@ -251,8 +257,9 @@ class ReactRuntime:
         state: AgentSessionState,
         result: ToolExecutionResult,
     ) -> None:
+        """Record tool result into replay buffer and session state."""
         if result.status == "completed":
-            completed_payload = {
+            completed_payload: dict[str, object] = {
                 "tool": result.tool_name,
                 "call_id": result.call_id,
             }
@@ -263,13 +270,16 @@ class ReactRuntime:
                     self._replay_buffer.append(session_id, "navigation.route_ready", route)
             self._replay_buffer.append(session_id, "tool.completed", completed_payload)
         else:
+            error_message = result.error_message
+            if not isinstance(error_message, str) or not error_message:
+                error_message = "tool execution failed"
             self._replay_buffer.append(
                 session_id,
                 "tool.failed",
                 {
                     "tool": result.tool_name,
                     "call_id": result.call_id,
-                    "error": result.error_message or "tool execution failed",
+                    "error": error_message,
                 },
             )
 
@@ -291,16 +301,23 @@ class ReactRuntime:
             tool_status=result.status,
             tool_output=result.output,
             fallback_intent=state.intent,
+            has_route=bool(state.working_memory.get("route")),
+            has_shops=bool(state.working_memory.get("shops"))
+            or bool(state.working_memory.get("shop")),
         )
 
     def _apply_tool_memory(self, *, state: AgentSessionState, result: ToolExecutionResult) -> None:
+        """Merge tool output into session working memory."""
         if result.tool_name == "select_next_subagent" and result.status == "completed":
             next_subagent = result.output.get("next_subagent")
             if isinstance(next_subagent, str) and next_subagent:
-                state.active_subagent = next_subagent
+                state.working_memory["next_subagent_candidate"] = next_subagent
             next_intent = result.output.get("intent")
             if isinstance(next_intent, str):
                 state.intent = _normalize_intent(next_intent)
+            done = result.output.get("done")
+            if isinstance(done, bool):
+                state.working_memory["subagent_done"] = done
             return
 
         if result.status != "completed":
@@ -352,6 +369,7 @@ class ReactRuntime:
             return
 
     def _fallback_reply(self, state: AgentSessionState, request: ChatRequest) -> str:
+        """Fallback reply to guarantee API always returns text."""
         reply = state.working_memory.get("reply")
         if isinstance(reply, str) and reply.strip():
             return reply.strip()
@@ -371,6 +389,7 @@ class ReactRuntime:
         return "request received but no sufficient result, try another keyword."
 
     def _build_response(self, *, session_id: str, state: AgentSessionState, final_text: str) -> ChatResponse:
+        """Build API response from memory-level shop and route payloads."""
         shops_raw: list[dict] = []
         memory_shops = state.working_memory.get("shops")
         if isinstance(memory_shops, list):
@@ -404,3 +423,4 @@ class ReactRuntime:
 
     def _append_turn(self, state: AgentSessionState, turn: AgentTurn) -> None:
         state.turns.append(turn)
+

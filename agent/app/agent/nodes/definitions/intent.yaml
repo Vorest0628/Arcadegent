@@ -1,9 +1,13 @@
 id: intent
+status: active
+subagent_name: intent_router
+prompt_file: intent_router.md
 description: Intent classifier node for search and navigation tasks.
 provider: rule_based
 model_pointer: main
-allowed_tools: []
+allowed_tools_mode: replace
+allowed_tools:
+  - select_next_subagent
 output_schema:
   intent: [search, search_nearby, navigate]
   confidence: float
-

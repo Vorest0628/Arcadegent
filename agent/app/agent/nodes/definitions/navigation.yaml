@@ -1,10 +1,16 @@
 id: navigation
+status: active
+subagent_name: navigation_agent
+prompt_file: navigation_agent.md
 description: Navigation node with provider selection and route planning.
 provider: local
 model_pointer: navigation
+allowed_tools_mode: replace
 allowed_tools:
+  - db_query_tool
   - geo_resolve_tool
   - route_plan_tool
+  - summary_tool
+  - select_next_subagent
 output_schema:
   route: object
-

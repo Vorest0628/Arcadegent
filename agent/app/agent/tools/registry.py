@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from pydantic import ValidationError
+from pydantic_core import ErrorDetails
 
 from app.agent.tools.builtin.db_query_tool import DBQueryTool
 from app.agent.tools.builtin.geo_resolve_tool import GeoResolveTool
@@ -59,6 +60,7 @@ class ToolRegistry:
         self._strict_schema = strict_schema
 
     def tool_definitions(self, *, allowed_tools: list[str]) -> list[dict[str, Any]]:
+        # 根据当前子代理可用工具列表，动态输出 function definitions。
         return build_tool_definitions(allowed_tools, strict=self._strict_schema)
 
     def execute(
@@ -69,6 +71,7 @@ class ToolRegistry:
         raw_arguments: dict[str, Any],
         allowed_tools: list[str],
     ) -> ToolExecutionResult:
+        # 统一执行链：权限检查 -> 参数校验 -> 工具分发 -> 结构化结果。
         try:
             self._permission_checker.ensure_allowed(tool_name=tool_name, allowed_tools=allowed_tools)
             validated = self._validate_arguments(tool_name=tool_name, raw_arguments=raw_arguments)
@@ -103,15 +106,18 @@ class ToolRegistry:
             )
 
     def _validate_arguments(self, *, tool_name: str, raw_arguments: dict[str, Any]) -> Any:
+        # 使用 pydantic schema 做强校验，避免工具层接收脏数据。
         model = TOOL_ARG_MODELS.get(tool_name)
         if model is None:
             raise ValueError(f"unknown_tool:{tool_name}")
         return model.model_validate(raw_arguments)
 
     def _dispatch(self, *, tool_name: str, validated: Any) -> dict[str, Any]:
+        # 所有内置工具的执行分发入口。
         if tool_name == "db_query_tool":
             args = validated if isinstance(validated, DBQueryArgs) else DBQueryArgs.model_validate(validated)
             if args.shop_id is not None:
+                # 单店查询分支：用于导航链路先定位目标门店。
                 shop = self._db_query_tool.get_shop(args.shop_id)
                 return {"shop": shop}
             rows, total = self._db_query_tool.search_shops(
@@ -181,8 +187,9 @@ class ToolRegistry:
         tool_name: str,
         error_type: str,
         message: str,
-        details: list[dict[str, Any]] | None = None,
+        details: list[ErrorDetails] | list[dict[str, Any]] | None = None,
     ) -> ToolExecutionResult:
+        # 统一错误结构，保证 runtime 可以不中断继续循环。
         payload: dict[str, Any] = {
             "error": {
                 "type": error_type,

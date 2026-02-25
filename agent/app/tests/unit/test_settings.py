@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from app.core.config import Settings
 
 
@@ -14,6 +16,11 @@ def test_settings_reads_llm_and_amap_env(monkeypatch) -> None:
     monkeypatch.setenv("LLM_MAX_TOKENS", "321")
     monkeypatch.setenv("AGENT_MAX_STEPS", "7")
     monkeypatch.setenv("AGENT_CONTEXT_WINDOW", "18")
+    monkeypatch.setenv("AGENT_NODES_DEFINITIONS_DIR", "custom/defs")
+    monkeypatch.setenv("AGENT_TOOL_POLICY_FILE", "custom/policy.yaml")
+    monkeypatch.setenv("AGENT_SUBAGENT_YAML_OVERLAY_ENABLED", "false")
+    monkeypatch.setenv("AGENT_PROVIDER_PROFILES_FILE", "custom/provider_profiles.yaml")
+    monkeypatch.setenv("AGENT_PROVIDER_PROFILE", "rule_based")
     monkeypatch.setenv("AMAP_API_KEY", "amap-key")
     monkeypatch.setenv("AMAP_BASE_URL", "https://restapi.amap.com")
     monkeypatch.setenv("AMAP_TIMEOUT_SECONDS", "6")
@@ -28,6 +35,11 @@ def test_settings_reads_llm_and_amap_env(monkeypatch) -> None:
     assert settings.llm_max_tokens == 321
     assert settings.agent_max_steps == 7
     assert settings.agent_context_window == 18
+    assert settings.agent_nodes_definitions_dir == Path("custom/defs")
+    assert settings.agent_tool_policy_file == Path("custom/policy.yaml")
+    assert settings.agent_subagent_yaml_overlay_enabled is False
+    assert settings.agent_provider_profiles_file == Path("custom/provider_profiles.yaml")
+    assert settings.agent_provider_profile == "rule_based"
     assert settings.amap_api_key == "amap-key"
     assert settings.amap_base_url == "https://restapi.amap.com"
     assert settings.amap_timeout_seconds == 6
