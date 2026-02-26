@@ -1,241 +1,371 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
-import { getArcadeDetail, listArcades, listCities, listCounties, listProvinces } from "./api/client";
-import type { ArcadeDetail, ArcadeSummary, PagedArcades, RegionItem } from "./types";
+﻿import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { deleteChatSession, getChatSession, listChatSessions, sendChat } from "./api/client";
+import { ArcadeBrowser } from "./components/ArcadeBrowser";
+import type { ChatHistoryTurn, ChatSessionSummary } from "./types";
 
-function usePagedState(): [PagedArcades, (payload: PagedArcades) => void] {
-  const [data, setData] = useState<PagedArcades>({
-    items: [],
-    page: 1,
-    page_size: 20,
-    total: 0,
-    total_pages: 0
+type ViewMode = "chat" | "arcades";
+
+const QUICK_PROMPTS = [
+  "帮我找北京适合下班后去的机厅",
+  "我在广州，推荐几家有 maimai 的店",
+  "给我一条从当前位置到最近机厅的路线建议"
+];
+
+function formatTimeLabel(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
   });
-  return [data, setData];
 }
 
-export function App() {
-  const [provinces, setProvinces] = useState<RegionItem[]>([]);
-  const [cities, setCities] = useState<RegionItem[]>([]);
-  const [counties, setCounties] = useState<RegionItem[]>([]);
-  const [keyword, setKeyword] = useState("");
-  const [provinceCode, setProvinceCode] = useState("");
-  const [cityCode, setCityCode] = useState("");
-  const [countyCode, setCountyCode] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [detail, setDetail] = useState<ArcadeDetail | null>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [paged, setPaged] = usePagedState();
+function toVisibleTurns(turns: ChatHistoryTurn[]): ChatHistoryTurn[] {
+  return turns.filter((turn) => turn.role === "user" || turn.role === "assistant");
+}
 
-  const pageSize = 20;
+function SidebarSessionItem({
+  item,
+  active,
+  onClick,
+  onDelete,
+  deleting
+}: {
+  item: ChatSessionSummary;
+  active: boolean;
+  onClick: () => void;
+  onDelete: () => void;
+  deleting: boolean;
+}) {
+  return (
+    <li>
+      <div className={`sidebar-session-wrap ${active ? "is-active" : ""}`}>
+        <button type="button" onClick={onClick} className="sidebar-session">
+          <strong>{item.title}</strong>
+          <span>{item.preview || "暂无摘要"}</span>
+          <small>{formatTimeLabel(item.updated_at)}</small>
+        </button>
+        <button type="button" className="sidebar-session-delete" onClick={onDelete} disabled={deleting}>
+          {deleting ? "..." : "删"}
+        </button>
+      </div>
+    </li>
+  );
+}
 
-  useEffect(() => {
-    void (async () => {
-      const rows = await listProvinces();
-      setProvinces(rows);
-    })();
-  }, []);
-
-  useEffect(() => {
-    if (!provinceCode) {
-      setCities([]);
-      setCityCode("");
-      setCounties([]);
-      setCountyCode("");
-      return;
-    }
-    void (async () => {
-      const rows = await listCities(provinceCode);
-      setCities(rows);
-      setCityCode("");
-      setCounties([]);
-      setCountyCode("");
-    })();
-  }, [provinceCode]);
-
-  useEffect(() => {
-    if (!cityCode) {
-      setCounties([]);
-      setCountyCode("");
-      return;
-    }
-    void (async () => {
-      const rows = await listCounties(cityCode);
-      setCounties(rows);
-      setCountyCode("");
-    })();
-  }, [cityCode]);
-
-  async function runSearch(page = 1) {
-    try {
-      setLoading(true);
-      setError("");
-      const payload = await listArcades({
-        keyword,
-        province_code: provinceCode || undefined,
-        city_code: cityCode || undefined,
-        county_code: countyCode || undefined,
-        page,
-        page_size: pageSize
-      });
-      setPaged(payload);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "查询失败");
-    } finally {
-      setLoading(false);
-    }
-  }
+function ChatPanel({
+  turns,
+  loading,
+  sending,
+  inputValue,
+  onInputChange,
+  onSubmit,
+  onQuickAsk,
+  error
+}: {
+  turns: ChatHistoryTurn[];
+  loading: boolean;
+  sending: boolean;
+  inputValue: string;
+  onInputChange: (value: string) => void;
+  onSubmit: (event: FormEvent) => Promise<void>;
+  onQuickAsk: (prompt: string) => void;
+  error: string;
+}) {
+  const endRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    void runSearch(1);
-  }, []);
-
-  async function onSubmit(event: FormEvent) {
-    event.preventDefault();
-    await runSearch(1);
-  }
-
-  async function openDetail(item: ArcadeSummary) {
-    setDetailLoading(true);
-    try {
-      const payload = await getArcadeDetail(item.source_id);
-      setDetail(payload);
-    } finally {
-      setDetailLoading(false);
-    }
-  }
-
-  const pageHint = useMemo(() => {
-    if (paged.total <= 0) {
-      return "无结果";
-    }
-    const start = (paged.page - 1) * paged.page_size + 1;
-    const end = Math.min(paged.total, paged.page * paged.page_size);
-    return `${start}-${end} / ${paged.total}`;
-  }, [paged]);
+    endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [turns, loading, sending]);
 
   return (
-    <div className="page">
-      <header className="hero">
-        <h1>Arcadegent Locator</h1>
-        <p>按关键词与省市区检索机厅，查看门店详情与机台分布。</p>
-      </header>
-
-      <main className="layout">
-        <section className="card controls">
-          <form onSubmit={onSubmit} className="filter-grid">
-            <label>
-              关键词
-              <input value={keyword} onChange={(e) => setKeyword(e.target.value)} placeholder="如 maimai / 风云再起" />
-            </label>
-            <label>
-              省份
-              <select value={provinceCode} onChange={(e) => setProvinceCode(e.target.value)}>
-                <option value="">全部</option>
-                {provinces.map((row) => (
-                  <option value={row.code} key={row.code}>
-                    {row.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              城市
-              <select value={cityCode} onChange={(e) => setCityCode(e.target.value)} disabled={!provinceCode}>
-                <option value="">全部</option>
-                {cities.map((row) => (
-                  <option value={row.code} key={row.code}>
-                    {row.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              区县
-              <select value={countyCode} onChange={(e) => setCountyCode(e.target.value)} disabled={!cityCode}>
-                <option value="">全部</option>
-                {counties.map((row) => (
-                  <option value={row.code} key={row.code}>
-                    {row.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button type="submit" disabled={loading}>
-              {loading ? "检索中..." : "开始检索"}
-            </button>
-          </form>
-
-          {error ? <div className="error">{error}</div> : null}
-
-          <div className="list-header">
-            <strong>检索结果</strong>
-            <span>{pageHint}</span>
-          </div>
-
-          <ul className="result-list">
-            {paged.items.map((item) => (
-              <li key={item.source_id}>
-                <button type="button" onClick={() => openDetail(item)}>
-                  <h3>{item.name}</h3>
-                  <p>{item.address || "暂无地址"}</p>
-                  <small>
-                    {item.province_name || "-"} / {item.city_name || "-"} / {item.county_name || "-"} · 机台{" "}
-                    {item.arcade_count}
-                  </small>
+    <div className="chat-view">
+      <div className="chat-scroll">
+        {turns.length === 0 ? (
+          <div className="chat-empty">
+            <p className="chat-empty-title">今天想查哪家机厅？</p>
+            <p className="chat-empty-subtitle">你可以直接提问，也可以先点一个预设问题。</p>
+            <div className="chat-quick-grid">
+              {QUICK_PROMPTS.map((prompt) => (
+                <button
+                  key={prompt}
+                  type="button"
+                  className="quick-chip"
+                  onClick={() => onQuickAsk(prompt)}
+                  disabled={sending}
+                >
+                  {prompt}
                 </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <ul className="chat-message-list">
+            {turns.map((turn, index) => (
+              <li key={`${turn.created_at}-${index}`} className={`chat-message ${turn.role}`}>
+                <div className="chat-bubble">
+                  <p>{turn.content}</p>
+                  <small>{formatTimeLabel(turn.created_at)}</small>
+                </div>
               </li>
             ))}
           </ul>
+        )}
 
-          <div className="pager">
-            <button
-              type="button"
-              disabled={paged.page <= 1 || loading}
-              onClick={() => void runSearch(Math.max(1, paged.page - 1))}
-            >
-              上一页
-            </button>
-            <span>
-              第 {paged.page} / {Math.max(1, paged.total_pages)} 页
-            </span>
-            <button
-              type="button"
-              disabled={paged.page >= paged.total_pages || loading || paged.total_pages === 0}
-              onClick={() => void runSearch(paged.page + 1)}
-            >
-              下一页
-            </button>
-          </div>
-        </section>
+        {loading ? <p className="chat-loading">加载会话中...</p> : null}
+        <div ref={endRef} />
+      </div>
 
-        <aside className="card detail">
-          <div className="detail-head">
-            <strong>门店详情</strong>
-          </div>
-          {detailLoading ? <p>加载详情中...</p> : null}
-          {!detailLoading && !detail ? <p>点击左侧门店查看详情。</p> : null}
-          {!detailLoading && detail ? (
-            <div className="detail-content">
-              <h2>{detail.name}</h2>
-              <p>{detail.address || "暂无地址"}</p>
-              <p>{detail.transport || "暂无交通信息"}</p>
-              <p className="comment">{detail.comment || "暂无备注"}</p>
-              <h4>机台列表（{detail.arcades.length}）</h4>
-              <ul className="title-list">
-                {detail.arcades.map((item, idx) => (
-                  <li key={`${item.title_id}-${idx}`}>
-                    <b>{item.title_name || "未知机种"}</b>
-                    <span>数量: {item.quantity ?? "-"}</span>
-                    <span>版本: {item.version || "-"}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
-        </aside>
-      </main>
+      {error ? <div className="chat-error">{error}</div> : null}
+
+      <form className="chat-composer" onSubmit={(event) => void onSubmit(event)}>
+        <input
+          value={inputValue}
+          onChange={(event) => onInputChange(event.target.value)}
+          placeholder="尽管问，带图也行"
+          disabled={sending}
+        />
+        <button type="submit" disabled={sending || inputValue.trim().length === 0}>
+          {sending ? "发送中..." : "发送"}
+        </button>
+      </form>
     </div>
   );
 }
 
+export function App() {
+  const [viewMode, setViewMode] = useState<ViewMode>("chat");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [turns, setTurns] = useState<ChatHistoryTurn[]>([]);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [turnsLoading, setTurnsLoading] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
+  const [inputValue, setInputValue] = useState("");
+  const [chatError, setChatError] = useState("");
+
+  const activeSession = useMemo(
+    () => sessions.find((session) => session.session_id === activeSessionId) ?? null,
+    [sessions, activeSessionId]
+  );
+
+  async function loadSessionList(preferredSessionId?: string) {
+    setSessionsLoading(true);
+    try {
+      const rows = await listChatSessions(60);
+      setSessions(rows);
+      if (!rows.length) {
+        setActiveSessionId(null);
+        setTurns([]);
+        return;
+      }
+      const targetId =
+        preferredSessionId && rows.some((item) => item.session_id === preferredSessionId)
+          ? preferredSessionId
+          : activeSessionId && rows.some((item) => item.session_id === activeSessionId)
+            ? activeSessionId
+            : rows[0].session_id;
+      if (targetId && targetId !== activeSessionId) {
+        await loadSession(targetId);
+      }
+    } catch (err) {
+      setChatError(err instanceof Error ? err.message : "加载会话列表失败");
+    } finally {
+      setSessionsLoading(false);
+    }
+  }
+
+  async function loadSession(sessionId: string) {
+    setTurnsLoading(true);
+    setChatError("");
+    try {
+      const detail = await getChatSession(sessionId);
+      setActiveSessionId(sessionId);
+      setTurns(toVisibleTurns(detail.turns));
+    } catch (err) {
+      setChatError(err instanceof Error ? err.message : "加载会话失败");
+    } finally {
+      setTurnsLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void loadSessionList();
+  }, []);
+
+  function openChatView() {
+    setViewMode("chat");
+    setSidebarOpen(false);
+  }
+
+  function openArcadesView() {
+    setViewMode("arcades");
+    setSidebarOpen(false);
+  }
+
+  function startNewSession() {
+    setViewMode("chat");
+    setActiveSessionId(null);
+    setTurns([]);
+    setInputValue("");
+    setChatError("");
+    setSidebarOpen(false);
+  }
+
+  async function submitChat(event: FormEvent) {
+    event.preventDefault();
+    const message = inputValue.trim();
+    if (!message || sending) {
+      return;
+    }
+
+    setSending(true);
+    setChatError("");
+    setInputValue("");
+
+    try {
+      const response = await sendChat({
+        session_id: activeSessionId || undefined,
+        message,
+        page_size: 5
+      });
+      await loadSession(response.session_id);
+      await loadSessionList(response.session_id);
+    } catch (err) {
+      setChatError(err instanceof Error ? err.message : "发送失败");
+      setInputValue(message);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  function quickAsk(prompt: string) {
+    setInputValue(prompt);
+    setViewMode("chat");
+    setSidebarOpen(false);
+  }
+
+  async function removeSession(sessionId: string) {
+    if (deletingSessionId || sending) {
+      return;
+    }
+    const ok = window.confirm("确认删除这个历史会话吗？");
+    if (!ok) {
+      return;
+    }
+    setDeletingSessionId(sessionId);
+    setChatError("");
+    try {
+      await deleteChatSession(sessionId);
+      const isActive = activeSessionId === sessionId;
+      if (isActive) {
+        setActiveSessionId(null);
+        setTurns([]);
+      }
+      await loadSessionList(isActive ? undefined : activeSessionId || undefined);
+    } catch (err) {
+      setChatError(err instanceof Error ? err.message : "删除会话失败");
+    } finally {
+      setDeletingSessionId(null);
+    }
+  }
+
+  return (
+    <div className="app-shell">
+      <aside className={`app-sidebar ${sidebarOpen ? "is-open" : ""}`}>
+        <div className="sidebar-top">
+          <h1>Arcadegent</h1>
+          <button type="button" className="sidebar-new" onClick={startNewSession}>
+            + 新建会话
+          </button>
+        </div>
+
+        <nav className="sidebar-nav">
+          <button
+            type="button"
+            className={`sidebar-nav-btn ${viewMode === "chat" ? "is-active" : ""}`}
+            onClick={openChatView}
+          >
+            Agent 对话
+          </button>
+          <button
+            type="button"
+            className={`sidebar-nav-btn ${viewMode === "arcades" ? "is-active" : ""}`}
+            onClick={openArcadesView}
+          >
+            机厅检索
+          </button>
+        </nav>
+
+        <div className="sidebar-history-head">
+          <strong>历史会话</strong>
+          <button type="button" onClick={() => void loadSessionList(activeSessionId || undefined)} disabled={sessionsLoading}>
+            刷新
+          </button>
+        </div>
+
+        <ul className="sidebar-history-list">
+          {sessionsLoading ? <li className="sidebar-empty">会话加载中...</li> : null}
+          {!sessionsLoading && sessions.length === 0 ? <li className="sidebar-empty">暂无历史会话</li> : null}
+          {!sessionsLoading
+            ? sessions.map((item) => (
+                <SidebarSessionItem
+                  key={item.session_id}
+                  item={item}
+                  active={item.session_id === activeSessionId}
+                  deleting={deletingSessionId === item.session_id}
+                  onClick={() => {
+                    setViewMode("chat");
+                    void loadSession(item.session_id);
+                    setSidebarOpen(false);
+                  }}
+                  onDelete={() => void removeSession(item.session_id)}
+                />
+              ))
+            : null}
+        </ul>
+      </aside>
+
+      <button
+        type="button"
+        className={`sidebar-backdrop ${sidebarOpen ? "is-open" : ""}`}
+        aria-label="关闭侧边栏"
+        onClick={() => setSidebarOpen(false)}
+      />
+
+      <main className="app-main">
+        <header className="topbar">
+          <button type="button" className="menu-btn" onClick={() => setSidebarOpen((value) => !value)}>
+            ☰
+          </button>
+          <div>
+            <h2>{viewMode === "chat" ? "Agent 对话" : "机厅检索"}</h2>
+            <p>{activeSession ? `最近更新 ${formatTimeLabel(activeSession.updated_at)}` : ""}</p>
+          </div>
+        </header>
+
+        {viewMode === "chat" ? (
+          <ChatPanel
+            turns={turns}
+            loading={turnsLoading}
+            sending={sending}
+            inputValue={inputValue}
+            onInputChange={setInputValue}
+            onSubmit={submitChat}
+            onQuickAsk={quickAsk}
+            error={chatError}
+          />
+        ) : (
+          <ArcadeBrowser />
+        )}
+      </main>
+    </div>
+  );
+}

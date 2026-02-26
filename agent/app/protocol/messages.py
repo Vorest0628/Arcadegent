@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 
 IntentType = Literal["search_nearby", "navigate", "search"]
+ChatRoleType = Literal["user", "assistant", "tool"]
 ProviderType = Literal["amap", "google", "none"]
 
 
@@ -124,3 +125,36 @@ class ChatResponse(BaseModel):
     shops: list[ArcadeShopSummaryDto] = Field(default_factory=list)
     route: RouteSummaryDto | None = None
 
+
+class ChatHistoryTurnDto(BaseModel):
+    """Persisted chat history turn for one session."""
+
+    role: ChatRoleType
+    content: str
+    name: str | None = None
+    call_id: str | None = None
+    created_at: str
+
+
+class ChatSessionSummaryDto(BaseModel):
+    """Session summary card shown in sidebar/history list."""
+
+    session_id: str
+    title: str
+    preview: str | None = None
+    intent: IntentType
+    turn_count: int
+    created_at: str
+    updated_at: str
+
+
+class ChatSessionDetailDto(BaseModel):
+    """Full session payload used to restore message history in UI."""
+
+    session_id: str
+    intent: IntentType
+    active_subagent: str
+    turn_count: int
+    created_at: str
+    updated_at: str
+    turns: list[ChatHistoryTurnDto] = Field(default_factory=list)

@@ -39,11 +39,15 @@ class TransitionPolicy:
             return current_subagent
 
         if tool_name == "db_query_tool":
+            total = tool_output.get("total")
             if current_subagent == "navigation_agent":
                 if has_route:
                     return "summary_agent"
                 return "navigation_agent"
             if has_shops:
+                return "summary_agent"
+            # Avoid repetitive empty-query loops; move to summary stage for explicit no-result response.
+            if isinstance(total, int) and total <= 0:
                 return "summary_agent"
             return "search_agent"
         if tool_name == "geo_resolve_tool":

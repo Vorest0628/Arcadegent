@@ -23,17 +23,26 @@ class LLMConfig:
     max_tokens: int
     tool_choice: str = "auto"
     parallel_tool_calls: bool = False
+    prefer_chat_completions: bool = False
+    profile_name: str = "default"
+    profile_enabled: bool = True
 
     @property
     def enabled(self) -> bool:
-        return bool(self.api_key.strip())
+        return self.profile_enabled and bool(self.api_key.strip())
 
 
 def _load_profile(profile_file: Path, profile_name: str) -> dict[str, Any]:
-    if not profile_file.exists():
+    candidate = profile_file
+    if not candidate.exists() and not candidate.is_absolute():
+        project_root = Path(__file__).resolve().parents[3]
+        rooted = project_root / candidate
+        if rooted.exists():
+            candidate = rooted
+    if not candidate.exists():
         return {}
     try:
-        raw = yaml.safe_load(profile_file.read_text(encoding="utf-8"))
+        raw = yaml.safe_load(candidate.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError):
         return {}
     if not isinstance(raw, dict):
@@ -111,19 +120,50 @@ def resolve_llm_config(settings: Settings) -> LLMConfig:
         settings.agent_provider_profile,
     )
     enabled = _pick_bool(profile, "enabled", True)
+    default_settings = Settings()
+    profile_base_url = _pick_str(profile, "base_url", default_settings.llm_base_url)
+    profile_model = _pick_str(profile, "model", default_settings.llm_model)
+    profile_timeout = _pick_float(profile, "timeout_seconds", float(default_settings.llm_timeout_seconds))
+    profile_temperature = _pick_float(profile, "temperature", float(default_settings.llm_temperature))
+    profile_max_tokens = _pick_int(profile, "max_tokens", int(default_settings.llm_max_tokens))
+
+    # Allow explicit runtime/env settings to override profile defaults.
+    selected_base_url = (
+        settings.llm_base_url
+        if settings.llm_base_url != default_settings.llm_base_url
+        else profile_base_url
+    )
+    selected_model = (
+        settings.llm_model
+        if settings.llm_model != default_settings.llm_model
+        else profile_model
+    )
+    selected_timeout = (
+        float(settings.llm_timeout_seconds)
+        if float(settings.llm_timeout_seconds) != float(default_settings.llm_timeout_seconds)
+        else profile_timeout
+    )
+    selected_temperature = (
+        float(settings.llm_temperature)
+        if float(settings.llm_temperature) != float(default_settings.llm_temperature)
+        else profile_temperature
+    )
+    selected_max_tokens = (
+        int(settings.llm_max_tokens)
+        if int(settings.llm_max_tokens) != int(default_settings.llm_max_tokens)
+        else profile_max_tokens
+    )
+
     return LLMConfig(
         api_key=settings.llm_api_key if enabled else "",
-        base_url=_pick_str(profile, "base_url", settings.llm_base_url),
-        model=_pick_str(profile, "model", settings.llm_model),
-        timeout_seconds=max(
-            1.0,
-            _pick_float(profile, "timeout_seconds", float(settings.llm_timeout_seconds)),
-        ),
-        temperature=max(
-            0.0,
-            _pick_float(profile, "temperature", float(settings.llm_temperature)),
-        ),
-        max_tokens=max(32, _pick_int(profile, "max_tokens", int(settings.llm_max_tokens))),
+        base_url=selected_base_url,
+        model=selected_model,
+        timeout_seconds=max(1.0, selected_timeout),
+        temperature=max(0.0, selected_temperature),
+        max_tokens=max(32, selected_max_tokens),
         tool_choice=_pick_str(profile, "tool_choice", "auto"),
         parallel_tool_calls=_pick_bool(profile, "parallel_tool_calls", False),
+        prefer_chat_completions=_pick_bool(profile, "prefer_chat_completions", False),
+        profile_name=settings.agent_provider_profile,
+        profile_enabled=enabled,
     )

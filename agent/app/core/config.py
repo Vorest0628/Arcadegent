@@ -27,6 +27,28 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _load_dotenv_if_exists() -> None:
+    """加载项目根目录下的 .env 文件（如果存在），将其中的键值对设置到环境变量中，供后续配置加载使用。"""
+    project_root = Path(__file__).resolve().parents[3]
+    dotenv_path = project_root / ".env"
+    if not dotenv_path.exists():
+        return
+    try:
+        lines = dotenv_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    for line in lines:
+        raw = line.strip()
+        if not raw or raw.startswith("#") or "=" not in raw:
+            continue
+        key, value = raw.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        parsed = value.strip().strip("'").strip('"')
+        os.environ.setdefault(key, parsed)
+
+
 @dataclass(frozen=True)
 class Settings:
     """Immutable application settings used across API/runtime layers."""
@@ -63,6 +85,7 @@ class Settings:
     @classmethod
     def from_env(cls) -> "Settings":
         """Create settings from process env with deterministic defaults."""
+        _load_dotenv_if_exists()
         return cls(
             app_name=os.getenv("APP_NAME", cls.app_name),
             app_version=os.getenv("APP_VERSION", cls.app_version),

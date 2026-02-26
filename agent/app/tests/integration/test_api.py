@@ -82,3 +82,26 @@ def test_chat_reuses_session_context(tmp_path: Path) -> None:
         assert first_payload["shops"][0]["source_id"] == 10
         assert second_payload["shops"]
         assert second_payload["shops"][0]["source_id"] == 10
+
+    sessions_resp = client.get("/api/v1/chat/sessions")
+    assert sessions_resp.status_code == 200
+    sessions = sessions_resp.json()
+    assert sessions
+    assert sessions[0]["session_id"] == session_id
+    assert sessions[0]["turn_count"] >= 2
+
+    detail_resp = client.get(f"/api/v1/chat/sessions/{session_id}")
+    assert detail_resp.status_code == 200
+    detail = detail_resp.json()
+    assert detail["session_id"] == session_id
+    assert detail["turn_count"] >= 2
+    turns = detail["turns"]
+    assert turns
+    assert turns[0]["role"] == "user"
+    assert turns[-1]["role"] == "assistant"
+
+    delete_resp = client.delete(f"/api/v1/chat/sessions/{session_id}")
+    assert delete_resp.status_code == 204
+
+    deleted_detail = client.get(f"/api/v1/chat/sessions/{session_id}")
+    assert deleted_detail.status_code == 404

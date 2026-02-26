@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from time import perf_counter
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.http.arcades import router as arcades_router
@@ -15,7 +16,9 @@ from app.api.stream.sse import router as sse_router
 from app.core.config import Settings
 from app.core.container import build_container
 from app.core.lifecycle import on_shutdown, on_startup
-from app.infra.observability.logger import setup_logging
+from app.infra.observability.logger import get_logger, setup_logging
+
+access_logger = get_logger("uvicorn.access")
 
 # 装配应用：配置、日志、依赖容器、生命周期、路由
 def create_app() -> FastAPI:
@@ -46,6 +49,28 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.middleware("http")
+    async def access_log(request: Request, call_next):
+        start = perf_counter()
+        status_code = 500
+        try:
+            response = await call_next(request)
+            status_code = response.status_code
+            return response
+        finally:
+            duration_ms = (perf_counter() - start) * 1000
+            query = f"?{request.url.query}" if request.url.query else ""
+            path = f"{request.url.path}{query}"
+            client_ip = request.client.host if request.client else "-"
+            access_logger.info(
+                '%s "%s %s" %s %.2fms',
+                client_ip,
+                request.method,
+                path,
+                status_code,
+                duration_ms,
+            )
 
     app.include_router(health_router)
     app.include_router(arcades_router)

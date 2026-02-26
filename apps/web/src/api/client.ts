@@ -1,4 +1,12 @@
-import type { ArcadeDetail, PagedArcades, RegionItem } from "../types";
+import type {
+  ArcadeDetail,
+  ChatRequest,
+  ChatResponse,
+  ChatSessionDetail,
+  ChatSessionSummary,
+  PagedArcades,
+  RegionItem
+} from "../types";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
 
@@ -20,6 +28,27 @@ async function fetchJson<T>(url: string): Promise<T> {
     throw new Error(`HTTP ${resp.status}: ${url}`);
   }
   return (await resp.json()) as T;
+}
+
+async function postJson<T>(path: string, payload: unknown): Promise<T> {
+  const resp = await fetch(buildUrl(path), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+  if (!resp.ok) {
+    throw new Error(`HTTP ${resp.status}: ${path}`);
+  }
+  return (await resp.json()) as T;
+}
+
+async function deleteJson(path: string): Promise<void> {
+  const resp = await fetch(buildUrl(path), { method: "DELETE" });
+  if (!resp.ok) {
+    throw new Error(`HTTP ${resp.status}: ${path}`);
+  }
 }
 
 export async function listArcades(params: {
@@ -49,3 +78,18 @@ export async function listCounties(cityCode: string): Promise<RegionItem[]> {
   return fetchJson<RegionItem[]>(buildUrl("/api/v1/regions/counties", { city_code: cityCode }));
 }
 
+export async function sendChat(payload: ChatRequest): Promise<ChatResponse> {
+  return postJson<ChatResponse>("/api/chat", payload);
+}
+
+export async function listChatSessions(limit = 40): Promise<ChatSessionSummary[]> {
+  return fetchJson<ChatSessionSummary[]>(buildUrl("/api/v1/chat/sessions", { limit }));
+}
+
+export async function getChatSession(sessionId: string): Promise<ChatSessionDetail> {
+  return fetchJson<ChatSessionDetail>(buildUrl(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}`));
+}
+
+export async function deleteChatSession(sessionId: string): Promise<void> {
+  return deleteJson(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}`);
+}

@@ -58,3 +58,61 @@ export type PagedArcades = {
   total_pages: number;
 };
 
+export type IntentType = "search" | "search_nearby" | "navigate";
+
+export type ChatRequest = {
+  session_id?: string;
+  message: string;
+  intent?: IntentType;
+  shop_id?: number;
+  keyword?: string;
+  province_code?: string;
+  city_code?: string;
+  county_code?: string;
+  page_size?: number;
+};
+
+export type RouteSummary = {
+  provider: "amap" | "google" | "none";
+  mode: string;
+  distance_m?: number | null;
+  duration_s?: number | null;
+  polyline: Array<{ lng: number; lat: number }>;
+  hint?: string | null;
+};
+
+export type ChatResponse = {
+  session_id: string;
+  intent: IntentType;
+  reply: string;
+  shops: ArcadeSummary[];
+  route?: RouteSummary | null;
+};
+
+export type ChatHistoryTurn = {
+  role: "user" | "assistant" | "tool";
+  content: string;
+  name?: string | null;
+  call_id?: string | null;
+  created_at: string;
+};
+
+export type ChatSessionSummary = {
+  session_id: string;
+  title: string;
+  preview?: string | null;
+  intent: IntentType;
+  turn_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ChatSessionDetail = {
+  session_id: string;
+  intent: IntentType;
+  active_subagent: string;
+  turn_count: number;
+  created_at: string;
+  updated_at: string;
+  turns: ChatHistoryTurn[];
+};

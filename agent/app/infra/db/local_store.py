@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -46,12 +47,66 @@ def _build_search_blob(shop: dict[str, Any]) -> str:
         str(shop.get("address") or ""),
         str(shop.get("transport") or ""),
         str(shop.get("comment") or ""),
+        str(shop.get("province_name") or ""),
+        str(shop.get("city_name") or ""),
+        str(shop.get("county_name") or ""),
+        str(shop.get("province_code") or ""),
+        str(shop.get("city_code") or ""),
+        str(shop.get("county_code") or ""),
     ]
     for item in shop.get("arcades", []):
         chunks.append(str(item.get("title_name") or ""))
         chunks.append(str(item.get("version") or ""))
         chunks.append(str(item.get("comment") or ""))
     return " ".join(chunks).lower()
+
+
+def _keyword_terms(keyword: str | None) -> list[str]:
+    if not keyword:
+        return []
+    normalized = keyword.strip().lower()
+    if not normalized:
+        return []
+    parts = [
+        term.strip()
+        for term in re.split(r"[\s,.;!?|/\\，。；！？、]+", normalized)
+        if term.strip()
+    ]
+    if not parts:
+        return []
+    # Keep term order while deduplicating to preserve matching signal.
+    deduped = list(dict.fromkeys(parts))
+    return deduped
+
+
+def _normalize_region_name(value: str | None) -> str:
+    if not value:
+        return ""
+    text = re.sub(r"\s+", "", str(value).strip().lower())
+    if not text:
+        return ""
+    suffixes = (
+        "特别行政区",
+        "自治区",
+        "自治州",
+        "自治县",
+        "地区",
+        "省",
+        "市",
+        "区",
+        "县",
+        "州",
+        "盟",
+    )
+    changed = True
+    while changed and text:
+        changed = False
+        for suffix in suffixes:
+            if text.endswith(suffix):
+                text = text[: -len(suffix)]
+                changed = True
+                break
+    return text
 
 
 class LocalArcadeStore:
@@ -225,10 +280,16 @@ class LocalArcadeStore:
         has_arcades: bool | None,
         page: int,
         page_size: int,
+        province_name: str | None = None,
+        city_name: str | None = None,
+        county_name: str | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
         """Filter and paginate shop list with deterministic order."""
         items: list[dict[str, Any]] = []
-        keyword_norm = keyword.strip().lower() if keyword else None
+        terms = _keyword_terms(keyword)
+        province_name_norm = _normalize_region_name(province_name)
+        city_name_norm = _normalize_region_name(city_name)
+        county_name_norm = _normalize_region_name(county_name)
         for row in self._shops:
             if province_code and str(row.get("province_code") or "") != province_code:
                 continue
@@ -236,11 +297,24 @@ class LocalArcadeStore:
                 continue
             if county_code and str(row.get("county_code") or "") != county_code:
                 continue
+            if province_name_norm and province_name_norm != _normalize_region_name(
+                str(row.get("province_name") or "")
+            ):
+                continue
+            if city_name_norm and city_name_norm != _normalize_region_name(
+                str(row.get("city_name") or "")
+            ):
+                continue
+            if county_name_norm and county_name_norm != _normalize_region_name(
+                str(row.get("county_name") or "")
+            ):
+                continue
             if has_arcades is True and row.get("arcade_count", 0) <= 0:
                 continue
             if has_arcades is False and row.get("arcade_count", 0) > 0:
                 continue
-            if keyword_norm and keyword_norm not in str(row.get("_search_blob") or ""):
+            search_blob = str(row.get("_search_blob") or "")
+            if terms and not all(term in search_blob for term in terms):
                 continue
             items.append(row)
 
@@ -264,4 +338,3 @@ class LocalArcadeStore:
     def list_counties(self, city_code: str) -> list[dict[str, str]]:
         """Return county list under one city code."""
         return self._counties.get(city_code, [])
-

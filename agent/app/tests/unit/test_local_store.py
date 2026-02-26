@@ -77,3 +77,87 @@ def test_regions_index(tmp_path: Path) -> None:
     cities = store.list_cities("110000000000")
     assert len(cities) == 1
     assert cities[0]["name"] == "Beijing"
+
+
+def test_keyword_can_match_city_and_title_terms(tmp_path: Path) -> None:
+    data_path = tmp_path / "shops_city_title.jsonl"
+    row = {
+        "source": "bemanicn",
+        "source_id": 9,
+        "source_url": "https://map.bemanicn.com/s/9",
+        "name": "GZ Arcade",
+        "address": "Tianhe",
+        "province_code": "440000000000",
+        "province_name": "\u5e7f\u4e1c",
+        "city_code": "440100000000",
+        "city_name": "\u5e7f\u5dde",
+        "county_code": "440106000000",
+        "county_name": "\u5929\u6cb3\u533a",
+        "updated_at": "2026-02-21T00:00:00Z",
+        "arcades": [{"title_name": "maimai", "quantity": 3}],
+    }
+    with data_path.open("w", encoding="utf-8") as handle:
+        handle.write(json.dumps(row, ensure_ascii=False))
+        handle.write("\n")
+
+    store = LocalArcadeStore.from_jsonl(data_path)
+    page, total = store.list_shops(
+        keyword="\u5e7f\u5dde maimai",
+        province_code=None,
+        city_code=None,
+        county_code=None,
+        has_arcades=True,
+        page=1,
+        page_size=10,
+    )
+    assert total == 1
+    assert page[0]["source_id"] == 9
+
+
+def test_filter_by_city_name_accepts_suffix_variants(tmp_path: Path) -> None:
+    data_path = tmp_path / "shops_city_filter.jsonl"
+    row = {
+        "source": "bemanicn",
+        "source_id": 11,
+        "source_url": "https://map.bemanicn.com/s/11",
+        "name": "City Filter Arcade",
+        "address": "Tianhe",
+        "province_code": "440000000000",
+        "province_name": "\u5e7f\u4e1c\u7701",
+        "city_code": "440100000000",
+        "city_name": "\u5e7f\u5dde\u5e02",
+        "county_code": "440106000000",
+        "county_name": "\u5929\u6cb3\u533a",
+        "updated_at": "2026-02-21T00:00:00Z",
+        "arcades": [{"title_name": "maimai", "quantity": 1}],
+    }
+    with data_path.open("w", encoding="utf-8") as handle:
+        handle.write(json.dumps(row, ensure_ascii=False))
+        handle.write("\n")
+
+    store = LocalArcadeStore.from_jsonl(data_path)
+    page_one, total_one = store.list_shops(
+        keyword="maimai",
+        province_code=None,
+        city_code=None,
+        county_code=None,
+        has_arcades=True,
+        page=1,
+        page_size=10,
+        city_name="\u5e7f\u5dde",
+    )
+    page_two, total_two = store.list_shops(
+        keyword="maimai",
+        province_code=None,
+        city_code=None,
+        county_code=None,
+        has_arcades=True,
+        page=1,
+        page_size=10,
+        city_name="\u5e7f\u5dde\u5e02",
+    )
+
+    assert total_one == 1
+    assert total_two == 1
+    assert page_one[0]["source_id"] == 11
+    assert page_two[0]["source_id"] == 11

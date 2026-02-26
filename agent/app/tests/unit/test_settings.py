@@ -43,3 +43,17 @@ def test_settings_reads_llm_and_amap_env(monkeypatch) -> None:
     assert settings.amap_api_key == "amap-key"
     assert settings.amap_base_url == "https://restapi.amap.com"
     assert settings.amap_timeout_seconds == 6
+
+def test_settings_does_not_use_openai_env_names(monkeypatch) -> None:
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_BASE_URL", raising=False)
+    monkeypatch.delenv("LLM_MODEL", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://openai.example.com/v1")
+    monkeypatch.setenv("OPENAI_MODEL", "gpt-openai")
+
+    settings = Settings.from_env()
+
+    assert settings.llm_api_key == ""
+    assert settings.llm_base_url == "https://api.openai.com/v1"
+    assert settings.llm_model == "gpt-4o-mini"

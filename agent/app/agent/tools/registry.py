@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any
 
 from pydantic import ValidationError
@@ -23,7 +24,33 @@ from app.agent.tools.schemas import (
     TOOL_ARG_MODELS,
     build_tool_definitions,
 )
+from app.infra.observability.logger import get_logger
 from app.protocol.messages import Location, RouteSummaryDto
+
+_REGION_CODE_PATTERN = re.compile(r"^\d{12}$")
+logger = get_logger(__name__)
+
+
+def _as_region_code_or_name(
+    code_value: str | None,
+    name_value: str | None,
+) -> tuple[str | None, str | None]:
+    code = code_value.strip() if isinstance(code_value, str) else None
+    name = name_value.strip() if isinstance(name_value, str) else None
+    if code and not _REGION_CODE_PATTERN.fullmatch(code):
+        if not name:
+            name = code
+        code = None
+    return code or None, name or None
+
+
+def _short(text: str | None, *, limit: int = 80) -> str:
+    if not isinstance(text, str):
+        return ""
+    compact = " ".join(text.split())
+    if len(compact) <= limit:
+        return compact
+    return f"{compact[: max(1, limit - 3)].rstrip()}..."
 
 
 @dataclass(frozen=True)
@@ -60,7 +87,6 @@ class ToolRegistry:
         self._strict_schema = strict_schema
 
     def tool_definitions(self, *, allowed_tools: list[str]) -> list[dict[str, Any]]:
-        # 根据当前子代理可用工具列表，动态输出 function definitions。
         return build_tool_definitions(allowed_tools, strict=self._strict_schema)
 
     def execute(
@@ -71,7 +97,6 @@ class ToolRegistry:
         raw_arguments: dict[str, Any],
         allowed_tools: list[str],
     ) -> ToolExecutionResult:
-        # 统一执行链：权限检查 -> 参数校验 -> 工具分发 -> 结构化结果。
         try:
             self._permission_checker.ensure_allowed(tool_name=tool_name, allowed_tools=allowed_tools)
             validated = self._validate_arguments(tool_name=tool_name, raw_arguments=raw_arguments)
@@ -97,7 +122,7 @@ class ToolRegistry:
                 message=str(exc),
                 details=exc.errors(),
             )
-        except Exception as exc:  # pragma: no cover - defensive runtime guard
+        except Exception as exc:  # pragma: no cover
             return self._failed(
                 call_id=call_id,
                 tool_name=tool_name,
@@ -106,28 +131,56 @@ class ToolRegistry:
             )
 
     def _validate_arguments(self, *, tool_name: str, raw_arguments: dict[str, Any]) -> Any:
-        # 使用 pydantic schema 做强校验，避免工具层接收脏数据。
         model = TOOL_ARG_MODELS.get(tool_name)
         if model is None:
             raise ValueError(f"unknown_tool:{tool_name}")
         return model.model_validate(raw_arguments)
 
     def _dispatch(self, *, tool_name: str, validated: Any) -> dict[str, Any]:
-        # 所有内置工具的执行分发入口。
         if tool_name == "db_query_tool":
             args = validated if isinstance(validated, DBQueryArgs) else DBQueryArgs.model_validate(validated)
             if args.shop_id is not None:
-                # 单店查询分支：用于导航链路先定位目标门店。
                 shop = self._db_query_tool.get_shop(args.shop_id)
                 return {"shop": shop}
+
+            province_code, province_name = _as_region_code_or_name(
+                args.province_code,
+                args.province_name,
+            )
+            city_code, city_name = _as_region_code_or_name(
+                args.city_code,
+                args.city_name,
+            )
+            county_code, county_name = _as_region_code_or_name(
+                args.county_code,
+                args.county_name,
+            )
+
             rows, total = self._db_query_tool.search_shops(
                 keyword=args.keyword,
-                province_code=args.province_code,
-                city_code=args.city_code,
-                county_code=args.county_code,
+                province_code=province_code,
+                city_code=city_code,
+                county_code=county_code,
+                province_name=province_name,
+                city_name=city_name,
+                county_name=county_name,
                 has_arcades=args.has_arcades,
                 page=args.page,
                 page_size=args.page_size,
+            )
+            logger.info(
+                "db_query_tool.filters keyword=%s province_code=%s city_code=%s county_code=%s province_name=%s city_name=%s county_name=%s has_arcades=%s page=%s page_size=%s total=%s",
+                _short(args.keyword),
+                province_code,
+                city_code,
+                county_code,
+                province_name,
+                city_name,
+                county_name,
+                args.has_arcades,
+                args.page,
+                args.page_size,
+                total,
             )
             return {"shops": rows, "total": total}
 
@@ -189,7 +242,6 @@ class ToolRegistry:
         message: str,
         details: list[ErrorDetails] | list[dict[str, Any]] | None = None,
     ) -> ToolExecutionResult:
-        # 统一错误结构，保证 runtime 可以不中断继续循环。
         payload: dict[str, Any] = {
             "error": {
                 "type": error_type,
@@ -205,4 +257,3 @@ class ToolRegistry:
             output=payload,
             error_message=message,
         )
-

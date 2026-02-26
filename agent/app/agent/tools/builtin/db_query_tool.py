@@ -20,6 +20,9 @@ class DBQueryTool:
         province_code: str | None,
         city_code: str | None,
         county_code: str | None,
+        province_name: str | None,
+        city_name: str | None,
+        county_name: str | None,
         has_arcades: bool | None,
         page: int,
         page_size: int,
@@ -29,6 +32,9 @@ class DBQueryTool:
             province_code=province_code,
             city_code=city_code,
             county_code=county_code,
+            province_name=province_name,
+            city_name=city_name,
+            county_name=county_name,
             has_arcades=has_arcades,
             page=page,
             page_size=page_size,
@@ -36,4 +42,3 @@ class DBQueryTool:
 
     def get_shop(self, source_id: int) -> dict[str, Any] | None:
         return self._store.get_shop(source_id)
-

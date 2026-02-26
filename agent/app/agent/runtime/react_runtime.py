@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from app.agent.context.context_builder import ContextBuilder
@@ -14,6 +15,7 @@ from app.agent.runtime.loop_guard import LoopGuard
 from app.agent.runtime.session_state import AgentSessionState, AgentTurn, SessionStateStore
 from app.agent.subagents.subagent_builder import SubAgentBuilder
 from app.agent.tools.registry import ToolExecutionResult, ToolRegistry
+from app.infra.observability.logger import get_logger
 from app.protocol.messages import (
     ArcadeShopSummaryDto,
     ChatRequest,
@@ -21,6 +23,8 @@ from app.protocol.messages import (
     IntentType,
     RouteSummaryDto,
 )
+
+logger = get_logger(__name__)
 
 
 def _infer_intent(message: str) -> IntentType:
@@ -31,6 +35,10 @@ def _infer_intent(message: str) -> IntentType:
     if re.search(r"\u9644\u8fd1|nearby|near", text):
         return "search_nearby"
     return "search"
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _normalize_intent(raw: str | None) -> IntentType:
@@ -61,6 +69,15 @@ def _extract_keyword(message: str) -> str:
     )
     cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.!?\uFF0C\u3002\uFF01\uFF1F")
     return cleaned or text
+
+
+def _short(text: str | None, *, limit: int = 120) -> str:
+    if not isinstance(text, str):
+        return ""
+    compact = " ".join(text.split())
+    if len(compact) <= limit:
+        return compact
+    return f"{compact[: max(1, limit - 3)].rstrip()}..."
 
 
 def _summary_row(raw: dict) -> ArcadeShopSummaryDto:
@@ -141,6 +158,14 @@ class ReactRuntime:
             state.working_memory["keyword"] = request.keyword
         else:
             state.working_memory["keyword"] = _extract_keyword(request.message)
+        logger.info(
+            "chat.start session_id=%s turn_index=%s intent=%s keyword=%s message=%s",
+            session_id,
+            state.turn_index,
+            state.intent,
+            _short(str(state.working_memory.get("keyword") or ""), limit=48),
+            _short(request.message, limit=140),
+        )
 
         self._append_turn(
             state,
@@ -164,13 +189,42 @@ class ReactRuntime:
         final_text: str | None = None
         # ReAct loop: context -> model -> tools -> memory -> next turn.
         while not guard.exhausted:
-            guard.next()
+            step = guard.next()
             subagent = self._subagent_builder.get(state.active_subagent)
             context = self._context_builder.build(
                 session_state=state,
                 request=request,
                 subagent=subagent,
             )
+            tool_message_count = sum(
+                1
+                for message in context.messages
+                if isinstance(message, dict) and str(message.get("role")) == "tool"
+            )
+            shops_payload = state.working_memory.get("shops")
+            shops_count = len(shops_payload) if isinstance(shops_payload, list) else 0
+            route_ready = bool(state.working_memory.get("route"))
+            logger.debug(
+                "chat.context session_id=%s step=%s subagent=%s allowed_tools=%s message_count=%s tool_messages=%s memory_shops=%s memory_total=%s memory_route=%s",
+                session_id,
+                step,
+                state.active_subagent,
+                subagent.allowed_tools,
+                len(context.messages),
+                tool_message_count,
+                shops_count,
+                state.working_memory.get("total"),
+                route_ready,
+            )
+            if state.active_subagent == "summary_agent" and shops_count > 0 and tool_message_count <= 0:
+                logger.warning(
+                    "summary.context.missing_tool_messages session_id=%s step=%s shops=%s total=%s message_count=%s",
+                    session_id,
+                    step,
+                    shops_count,
+                    state.working_memory.get("total"),
+                    len(context.messages),
+                )
             model_response = self._provider_adapter.complete(
                 instructions=context.instructions,
                 messages=context.messages,
@@ -184,6 +238,14 @@ class ReactRuntime:
             )
             if model_response.response_id:
                 state.previous_response_id = model_response.response_id
+            logger.info(
+                "chat.step session_id=%s step=%s subagent=%s tool_calls=%s has_text=%s",
+                session_id,
+                step,
+                state.active_subagent,
+                len(model_response.tool_calls),
+                bool(model_response.text),
+            )
 
             if model_response.tool_calls:
                 terminal_after_tools = self._execute_tool_calls(
@@ -206,6 +268,11 @@ class ReactRuntime:
                 break
 
         if not final_text:
+            logger.warning(
+                "chat.fallback session_id=%s reason=empty_model_output last_error=%s",
+                session_id,
+                _short(str(state.working_memory.get("last_error") or ""), limit=180),
+            )
             final_text = self._fallback_reply(state, request)
 
         self._append_turn(
@@ -218,6 +285,13 @@ class ReactRuntime:
         )
         state.working_memory["reply"] = final_text
         self._replay_buffer.append(session_id, "assistant.completed", {"reply": final_text})
+        logger.info(
+            "chat.done session_id=%s intent=%s shops=%s reply=%s",
+            session_id,
+            _normalize_intent(state.intent),
+            len(state.working_memory.get("shops") or []),
+            _short(final_text, limit=160),
+        )
         return self._build_response(session_id=session_id, state=state, final_text=final_text)
 
     def _execute_tool_calls(
@@ -231,6 +305,26 @@ class ReactRuntime:
         """Execute tool calls sequentially and return terminal flag."""
         terminal = False
         for call in tool_calls:
+            prepared_args, hydrated_fields = self._prepare_tool_arguments(
+                state=state,
+                tool_name=call.name,
+                raw_arguments=call.arguments,
+            )
+            logger.info(
+                "tool.call session_id=%s tool=%s call_id=%s args=%s",
+                session_id,
+                call.name,
+                call.call_id,
+                _short(json.dumps(prepared_args, ensure_ascii=False), limit=220),
+            )
+            if hydrated_fields:
+                logger.debug(
+                    "tool.call.hydrated session_id=%s tool=%s call_id=%s fields=%s",
+                    session_id,
+                    call.name,
+                    call.call_id,
+                    hydrated_fields,
+                )
             self._replay_buffer.append(
                 session_id,
                 "tool.started",
@@ -239,7 +333,7 @@ class ReactRuntime:
             result = self._tool_registry.execute(
                 call_id=call.call_id,
                 tool_name=call.name,
-                raw_arguments=call.arguments,
+                raw_arguments=prepared_args,
                 allowed_tools=allowed_tools,
             )
             self._record_tool_result(session_id=session_id, state=state, result=result)
@@ -249,6 +343,71 @@ class ReactRuntime:
             ):
                 terminal = True
         return terminal
+
+    def _prepare_tool_arguments(
+        self,
+        *,
+        state: AgentSessionState,
+        tool_name: str,
+        raw_arguments: dict[str, object],
+    ) -> tuple[dict[str, object], list[str]]:
+        if tool_name != "summary_tool":
+            return dict(raw_arguments), []
+
+        args = dict(raw_arguments)
+        hydrated: list[str] = []
+
+        topic = args.get("topic")
+        if topic not in {"search", "navigation"}:
+            inferred_topic = "navigation" if bool(state.working_memory.get("route")) else "search"
+            args["topic"] = inferred_topic
+            topic = inferred_topic
+            hydrated.append("topic")
+
+        if topic == "navigation":
+            if not isinstance(args.get("route"), dict):
+                route = state.working_memory.get("route")
+                if isinstance(route, dict):
+                    args["route"] = route
+                    hydrated.append("route")
+            shop_name = args.get("shop_name")
+            if not isinstance(shop_name, str) or not shop_name.strip():
+                shop_value = state.working_memory.get("shop")
+                candidate_name: str | None = None
+                if isinstance(shop_value, dict):
+                    name = shop_value.get("name")
+                    if isinstance(name, str) and name.strip():
+                        candidate_name = name.strip()
+                if candidate_name is None:
+                    shops_value = state.working_memory.get("shops")
+                    if isinstance(shops_value, list) and shops_value:
+                        first = shops_value[0]
+                        if isinstance(first, dict):
+                            name = first.get("name")
+                            if isinstance(name, str) and name.strip():
+                                candidate_name = name.strip()
+                if candidate_name is not None:
+                    args["shop_name"] = candidate_name
+                    hydrated.append("shop_name")
+            return args, hydrated
+
+        if args.get("total") is None:
+            total = state.working_memory.get("total")
+            if isinstance(total, int):
+                args["total"] = total
+                hydrated.append("total")
+        if not isinstance(args.get("shops"), list):
+            shops = state.working_memory.get("shops")
+            if isinstance(shops, list):
+                args["shops"] = shops
+                hydrated.append("shops")
+        keyword = args.get("keyword")
+        if not isinstance(keyword, str) or not keyword.strip():
+            memory_keyword = state.working_memory.get("keyword")
+            if isinstance(memory_keyword, str) and memory_keyword.strip():
+                args["keyword"] = memory_keyword.strip()
+                hydrated.append("keyword")
+        return args, hydrated
 
     def _record_tool_result(
         self,
@@ -269,6 +428,28 @@ class ReactRuntime:
                     completed_payload["distance_m"] = route.get("distance_m")
                     self._replay_buffer.append(session_id, "navigation.route_ready", route)
             self._replay_buffer.append(session_id, "tool.completed", completed_payload)
+            if result.tool_name == "db_query_tool":
+                total = int(result.output.get("total") or 0)
+                logger.info(
+                    "tool.completed session_id=%s tool=%s total=%s",
+                    session_id,
+                    result.tool_name,
+                    total,
+                )
+            else:
+                logger.info(
+                    "tool.completed session_id=%s tool=%s",
+                    session_id,
+                    result.tool_name,
+                )
+            logger.debug(
+                "tool.observe session_id=%s tool=%s status=%s output_keys=%s output_preview=%s",
+                session_id,
+                result.tool_name,
+                result.status,
+                sorted(list(result.output.keys())),
+                self._tool_output_preview(result.output),
+            )
         else:
             error_message = result.error_message
             if not isinstance(error_message, str) or not error_message:
@@ -282,6 +463,20 @@ class ReactRuntime:
                     "error": error_message,
                 },
             )
+            logger.warning(
+                "tool.failed session_id=%s tool=%s error=%s",
+                session_id,
+                result.tool_name,
+                _short(error_message, limit=160),
+            )
+            logger.debug(
+                "tool.observe session_id=%s tool=%s status=%s output_keys=%s output_preview=%s",
+                session_id,
+                result.tool_name,
+                result.status,
+                sorted(list(result.output.keys())),
+                self._tool_output_preview(result.output),
+            )
 
         self._append_turn(
             state,
@@ -293,9 +488,9 @@ class ReactRuntime:
                 payload={"status": result.status, "result": result.output},
             ),
         )
-
+        previous_subagent = state.active_subagent
         self._apply_tool_memory(state=state, result=result)
-        state.active_subagent = self._transition_policy.next_subagent(
+        next_subagent = self._transition_policy.next_subagent(
             current_subagent=state.active_subagent,
             tool_name=result.tool_name,
             tool_status=result.status,
@@ -305,6 +500,30 @@ class ReactRuntime:
             has_shops=bool(state.working_memory.get("shops"))
             or bool(state.working_memory.get("shop")),
         )
+        state.active_subagent = next_subagent
+        shops_payload = state.working_memory.get("shops")
+        shops_count = len(shops_payload) if isinstance(shops_payload, list) else 0
+        logger.debug(
+            "tool.memory session_id=%s tool=%s status=%s has_shop=%s shops=%s total=%s has_route=%s has_reply=%s next_subagent=%s",
+            session_id,
+            result.tool_name,
+            result.status,
+            isinstance(state.working_memory.get("shop"), dict),
+            shops_count,
+            state.working_memory.get("total"),
+            bool(state.working_memory.get("route")),
+            bool(str(state.working_memory.get("reply") or "").strip()),
+            state.active_subagent,
+        )
+        if previous_subagent != state.active_subagent:
+            logger.debug(
+                "chat.transition session_id=%s from=%s tool=%s status=%s to=%s",
+                session_id,
+                previous_subagent,
+                result.tool_name,
+                result.status,
+                state.active_subagent,
+            )
 
     def _apply_tool_memory(self, *, state: AgentSessionState, result: ToolExecutionResult) -> None:
         """Merge tool output into session working memory."""
@@ -386,6 +605,14 @@ class ReactRuntime:
             top = shops_payload[0] if isinstance(shops_payload[0], dict) else None
             if isinstance(top, dict):
                 return f"matched arcades found, start with {top.get('name') or 'unknown arcade'}."
+        last_error = state.working_memory.get("last_error")
+        if isinstance(last_error, dict):
+            message = last_error.get("message")
+            if isinstance(message, str) and message.strip():
+                return f"request processed but tool failed: {message.strip()}"
+        keyword = str(state.working_memory.get("keyword") or "").strip()
+        if keyword:
+            return f"request received but no sufficient result for '{keyword}', try another keyword."
         return "request received but no sufficient result, try another keyword."
 
     def _build_response(self, *, session_id: str, state: AgentSessionState, final_text: str) -> ChatResponse:
@@ -423,4 +650,27 @@ class ReactRuntime:
 
     def _append_turn(self, state: AgentSessionState, turn: AgentTurn) -> None:
         state.turns.append(turn)
+        state.updated_at = _utc_now_iso()
+
+    def _tool_output_preview(self, output: dict[str, object]) -> str:
+        if not output:
+            return "{}"
+        total = output.get("total")
+        if isinstance(total, int):
+            shops = output.get("shops")
+            if isinstance(shops, list):
+                return f"total={total},shops={len(shops)}"
+            return f"total={total}"
+        reply = output.get("reply")
+        if isinstance(reply, str):
+            return f"reply={_short(reply, limit=120)}"
+        route = output.get("route")
+        if isinstance(route, dict):
+            distance = route.get("distance_m")
+            duration = route.get("duration_s")
+            return f"route(distance_m={distance},duration_s={duration})"
+        provider = output.get("provider")
+        if isinstance(provider, str):
+            return f"provider={provider}"
+        return _short(json.dumps(output, ensure_ascii=False), limit=220)
 

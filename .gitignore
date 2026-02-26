@@ -7,6 +7,7 @@ __pycache__/
 .venv/
 .pydeps/
 .playwright-browsers/
+.env
 
 # Frontend
 apps/web/node_modules/

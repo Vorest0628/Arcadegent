@@ -37,6 +37,22 @@ def test_search_db_result_routes_to_summary_when_shops_exist() -> None:
     assert next_subagent == "summary_agent"
 
 
+def test_search_db_zero_total_routes_to_summary_to_avoid_loops() -> None:
+    policy = TransitionPolicy()
+
+    next_subagent = policy.next_subagent(
+        current_subagent="search_agent",
+        tool_name="db_query_tool",
+        tool_status="completed",
+        tool_output={"total": 0},
+        fallback_intent="search",
+        has_route=False,
+        has_shops=False,
+    )
+
+    assert next_subagent == "summary_agent"
+
+
 def test_route_plan_without_route_keeps_navigation_stage() -> None:
     policy = TransitionPolicy()
 

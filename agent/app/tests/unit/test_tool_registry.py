@@ -88,3 +88,28 @@ def test_tool_registry_can_lookup_one_shop(tmp_path: Path) -> None:
     )
     assert result.status == "completed"
     assert result.output["shop"]["source_id"] == 1
+
+
+def test_tool_registry_normalizes_city_name_in_city_code_field(tmp_path: Path) -> None:
+    registry = _build_registry(tmp_path)
+    result = registry.execute(
+        call_id="c3",
+        tool_name="db_query_tool",
+        raw_arguments={
+            "keyword": "maimai",
+            "province_code": None,
+            "city_code": "Beijing",
+            "county_code": None,
+            "province_name": None,
+            "city_name": None,
+            "county_name": None,
+            "has_arcades": True,
+            "page": 1,
+            "page_size": 10,
+            "shop_id": None,
+        },
+        allowed_tools=["db_query_tool"],
+    )
+    assert result.status == "completed"
+    assert result.output["total"] == 1
+    assert result.output["shops"][0]["source_id"] == 1
