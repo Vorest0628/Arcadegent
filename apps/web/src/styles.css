@@ -30,12 +30,14 @@ body {
     radial-gradient(circle at 0% 0%, #f4d8a9 0%, transparent 22%),
     radial-gradient(circle at 88% 12%, #c7eadf 0%, transparent 25%),
     linear-gradient(145deg, var(--bg-top), var(--bg-bottom));
+  animation: app-fade-in 360ms ease-out;
 }
 
 .app-shell {
   min-height: 100vh;
   display: grid;
   grid-template-columns: 312px 1fr;
+  animation: shell-slide-in 420ms ease-out;
 }
 
 .app-sidebar {
@@ -128,6 +130,12 @@ body {
   grid-template-columns: 1fr auto;
   gap: 4px;
   align-items: stretch;
+  transition: transform 0.18s ease, box-shadow 0.22s ease, border-color 0.22s ease;
+}
+
+.sidebar-session-wrap:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 18px rgba(21, 56, 49, 0.08);
 }
 
 .sidebar-session {
@@ -148,7 +156,6 @@ body {
   line-height: 1.3;
 }
 
-.sidebar-session span,
 .sidebar-session small {
   color: var(--muted);
   font-size: 0.78rem;
@@ -269,6 +276,13 @@ body {
   color: var(--ink);
   cursor: pointer;
   font: inherit;
+  transition: transform 0.15s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.quick-chip:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 16px rgba(20, 54, 47, 0.1);
+  border-color: #aad3c8;
 }
 
 .chat-message-list {
@@ -281,6 +295,9 @@ body {
 
 .chat-message {
   display: flex;
+  opacity: 0;
+  transform: translateY(10px);
+  animation: message-rise 260ms ease-out forwards;
 }
 
 .chat-message.user {
@@ -299,6 +316,7 @@ body {
   padding: 10px 12px;
   display: grid;
   gap: 6px;
+  box-shadow: 0 10px 20px rgba(19, 39, 34, 0.05);
 }
 
 .chat-message.user .chat-bubble {
@@ -321,6 +339,81 @@ body {
   margin: 10px 0 0;
   color: var(--muted);
   font-size: 0.9rem;
+}
+
+.chat-stage-board {
+  border-top: 1px dashed var(--line);
+  background: rgba(255, 255, 255, 0.72);
+  padding: 10px 12px 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.chat-stage-board.is-live {
+  background: linear-gradient(180deg, rgba(216, 236, 231, 0.58), rgba(255, 255, 255, 0.72));
+}
+
+.chat-stage-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-stage-head strong {
+  font-size: 0.9rem;
+}
+
+.chat-stage-head small {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.chat-stage-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #93aca5;
+}
+
+.chat-stage-dot.is-live {
+  background: #1f8f7a;
+  animation: pulse-live 1.1s ease-in-out infinite;
+}
+
+.chat-stage-current {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #1a5649;
+}
+
+.chat-stage-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.chat-stage-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 8px;
+  border: 1px solid #d9e9e2;
+  border-radius: 10px;
+  background: #ffffff;
+  font-size: 0.85rem;
+}
+
+.chat-stage-list small {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.chat-stage-empty {
+  color: var(--muted);
 }
 
 .chat-error {
@@ -360,6 +453,12 @@ body {
   color: #fff;
   cursor: pointer;
   font: inherit;
+  transition: transform 0.16s ease, filter 0.2s ease;
+}
+
+.chat-composer button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  filter: brightness(1.05);
 }
 
 .chat-composer button:disabled,
@@ -395,6 +494,7 @@ body {
   border: 1px solid var(--line);
   border-radius: 16px;
   box-shadow: 0 12px 24px rgba(19, 38, 34, 0.08);
+  animation: card-enter 320ms ease-out;
 }
 
 .browser-controls,
@@ -476,6 +576,13 @@ body {
   cursor: pointer;
   color: var(--ink);
   font: inherit;
+  transition: transform 0.16s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.browser-item-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(19, 38, 34, 0.1);
+  border-color: #9fcabc;
 }
 
 .browser-item-btn h3 {
@@ -603,5 +710,59 @@ body {
 
   .browser-filter-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+@keyframes app-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes shell-slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes message-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse-live {
+  0%,
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(31, 143, 122, 0.18);
+  }
+  50% {
+    transform: scale(1.12);
+    box-shadow: 0 0 0 5px rgba(31, 143, 122, 0.06);
+  }
+}
+
+@keyframes card-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
   }
 }

@@ -184,6 +184,11 @@ class ReactRuntime:
                 "active_subagent": state.active_subagent,
             },
         )
+        self._emit_subagent_changed(
+            session_id=session_id,
+            to_subagent=state.active_subagent,
+            reason="session.started",
+        )
 
         guard = LoopGuard(self._max_steps)
         final_text: str | None = None
@@ -328,7 +333,11 @@ class ReactRuntime:
             self._replay_buffer.append(
                 session_id,
                 "tool.started",
-                {"tool": call.name, "call_id": call.call_id},
+                {
+                    "tool": call.name,
+                    "call_id": call.call_id,
+                    "active_subagent": state.active_subagent,
+                },
             )
             result = self._tool_registry.execute(
                 call_id=call.call_id,
@@ -417,10 +426,12 @@ class ReactRuntime:
         result: ToolExecutionResult,
     ) -> None:
         """Record tool result into replay buffer and session state."""
+        previous_subagent = state.active_subagent
         if result.status == "completed":
             completed_payload: dict[str, object] = {
                 "tool": result.tool_name,
                 "call_id": result.call_id,
+                "active_subagent": previous_subagent,
             }
             if result.tool_name == "route_plan_tool":
                 route = result.output.get("route")
@@ -461,6 +472,7 @@ class ReactRuntime:
                     "tool": result.tool_name,
                     "call_id": result.call_id,
                     "error": error_message,
+                    "active_subagent": previous_subagent,
                 },
             )
             logger.warning(
@@ -488,7 +500,6 @@ class ReactRuntime:
                 payload={"status": result.status, "result": result.output},
             ),
         )
-        previous_subagent = state.active_subagent
         self._apply_tool_memory(state=state, result=result)
         next_subagent = self._transition_policy.next_subagent(
             current_subagent=state.active_subagent,
@@ -516,6 +527,14 @@ class ReactRuntime:
             state.active_subagent,
         )
         if previous_subagent != state.active_subagent:
+            self._emit_subagent_changed(
+                session_id=session_id,
+                from_subagent=previous_subagent,
+                to_subagent=state.active_subagent,
+                reason="tool.transition",
+                tool_name=result.tool_name,
+                tool_status=result.status,
+            )
             logger.debug(
                 "chat.transition session_id=%s from=%s tool=%s status=%s to=%s",
                 session_id,
@@ -673,4 +692,27 @@ class ReactRuntime:
         if isinstance(provider, str):
             return f"provider={provider}"
         return _short(json.dumps(output, ensure_ascii=False), limit=220)
+
+    def _emit_subagent_changed(
+        self,
+        *,
+        session_id: str,
+        to_subagent: str,
+        reason: str,
+        from_subagent: str | None = None,
+        tool_name: str | None = None,
+        tool_status: str | None = None,
+    ) -> None:
+        payload: dict[str, object] = {
+            "active_subagent": to_subagent,
+            "to_subagent": to_subagent,
+            "reason": reason,
+        }
+        if from_subagent:
+            payload["from_subagent"] = from_subagent
+        if tool_name:
+            payload["tool"] = tool_name
+        if tool_status:
+            payload["tool_status"] = tool_status
+        self._replay_buffer.append(session_id, "subagent.changed", payload)
 

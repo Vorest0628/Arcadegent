@@ -1,7 +1,18 @@
-﻿import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { deleteChatSession, getChatSession, listChatSessions, sendChat } from "./api/client";
+﻿import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  buildChatStreamUrl,
+  deleteChatSession,
+  getChatSession,
+  listChatSessions,
+  sendChat
+} from "./api/client";
 import { ArcadeBrowser } from "./components/ArcadeBrowser";
-import type { ChatHistoryTurn, ChatSessionSummary } from "./types";
+import type {
+  ChatHistoryTurn,
+  ChatSessionSummary,
+  ChatStreamEnvelope,
+  ChatStreamEventName
+} from "./types";
 
 type ViewMode = "chat" | "arcades";
 
@@ -10,6 +21,41 @@ const QUICK_PROMPTS = [
   "我在广州，推荐几家有 maimai 的店",
   "给我一条从当前位置到最近机厅的路线建议"
 ];
+
+const STREAM_EVENT_NAMES: ChatStreamEventName[] = [
+  "session.started",
+  "subagent.changed",
+  "assistant.token",
+  "tool.started",
+  "tool.progress",
+  "tool.completed",
+  "tool.failed",
+  "navigation.route_ready",
+  "assistant.completed",
+  "session.failed"
+];
+
+const SUBAGENT_LABEL: Record<string, string> = {
+  intent_router: "意图路由",
+  search_agent: "检索阶段",
+  navigation_agent: "导航阶段",
+  summary_agent: "总结阶段"
+};
+
+const TOOL_LABEL: Record<string, string> = {
+  db_query_tool: "数据检索",
+  geo_resolve_tool: "位置解析",
+  route_plan_tool: "路线规划",
+  summary_tool: "结果总结",
+  select_next_subagent: "阶段选择"
+};
+
+type StreamProgressItem = {
+  id: number;
+  event: ChatStreamEventName;
+  text: string;
+  at: string;
+};
 
 function formatTimeLabel(value: string): string {
   const date = new Date(value);
@@ -26,6 +72,65 @@ function formatTimeLabel(value: string): string {
 
 function toVisibleTurns(turns: ChatHistoryTurn[]): ChatHistoryTurn[] {
   return turns.filter((turn) => turn.role === "user" || turn.role === "assistant");
+}
+
+function formatSubagentLabel(subagent: string | null): string {
+  if (!subagent) {
+    return "等待阶段信号";
+  }
+  return SUBAGENT_LABEL[subagent] ?? subagent;
+}
+
+function formatToolLabel(toolName: string | undefined): string {
+  if (!toolName) {
+    return "工具";
+  }
+  return TOOL_LABEL[toolName] ?? toolName;
+}
+
+function toProgressText(envelope: ChatStreamEnvelope): string {
+  const toolNameRaw = envelope.data.tool;
+  const toolName = typeof toolNameRaw === "string" ? toolNameRaw : undefined;
+  if (envelope.event === "session.started") {
+    return "会话开始";
+  }
+  if (envelope.event === "subagent.changed") {
+    const nextRaw = envelope.data.to_subagent ?? envelope.data.active_subagent;
+    const next = typeof nextRaw === "string" ? nextRaw : null;
+    return `切换到 ${formatSubagentLabel(next)}`;
+  }
+  if (envelope.event === "assistant.token") {
+    return "正在生成回复";
+  }
+  if (envelope.event === "tool.started") {
+    return `${formatToolLabel(toolName)} 执行中`;
+  }
+  if (envelope.event === "tool.progress") {
+    return `${formatToolLabel(toolName)} 处理中`;
+  }
+  if (envelope.event === "tool.completed") {
+    return `${formatToolLabel(toolName)} 已完成`;
+  }
+  if (envelope.event === "tool.failed") {
+    return `${formatToolLabel(toolName)} 失败`;
+  }
+  if (envelope.event === "navigation.route_ready") {
+    return "路线已生成";
+  }
+  if (envelope.event === "assistant.completed") {
+    return "最终回复已生成";
+  }
+  if (envelope.event === "session.failed") {
+    return "会话执行失败";
+  }
+  return envelope.event;
+}
+
+function makeSessionId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return `s_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+  }
+  return `s_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function SidebarSessionItem({
@@ -46,7 +151,6 @@ function SidebarSessionItem({
       <div className={`sidebar-session-wrap ${active ? "is-active" : ""}`}>
         <button type="button" onClick={onClick} className="sidebar-session">
           <strong>{item.title}</strong>
-          <span>{item.preview || "暂无摘要"}</span>
           <small>{formatTimeLabel(item.updated_at)}</small>
         </button>
         <button type="button" className="sidebar-session-delete" onClick={onDelete} disabled={deleting}>
@@ -65,7 +169,10 @@ function ChatPanel({
   onInputChange,
   onSubmit,
   onQuickAsk,
-  error
+  error,
+  streamConnected,
+  activeSubagent,
+  streamItems
 }: {
   turns: ChatHistoryTurn[];
   loading: boolean;
@@ -75,12 +182,15 @@ function ChatPanel({
   onSubmit: (event: FormEvent) => Promise<void>;
   onQuickAsk: (prompt: string) => void;
   error: string;
+  streamConnected: boolean;
+  activeSubagent: string | null;
+  streamItems: StreamProgressItem[];
 }) {
   const endRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [turns, loading, sending]);
+  }, [turns, loading, sending, streamItems]);
 
   return (
     <div className="chat-view">
@@ -106,7 +216,11 @@ function ChatPanel({
         ) : (
           <ul className="chat-message-list">
             {turns.map((turn, index) => (
-              <li key={`${turn.created_at}-${index}`} className={`chat-message ${turn.role}`}>
+              <li
+                key={`${turn.created_at}-${index}`}
+                className={`chat-message ${turn.role}`}
+                style={{ animationDelay: `${Math.min(index, 8) * 45}ms` }}
+              >
                 <div className="chat-bubble">
                   <p>{turn.content}</p>
                   <small>{formatTimeLabel(turn.created_at)}</small>
@@ -119,6 +233,29 @@ function ChatPanel({
         {loading ? <p className="chat-loading">加载会话中...</p> : null}
         <div ref={endRef} />
       </div>
+
+      {sending || streamItems.length ? (
+        <section className={`chat-stage-board ${streamConnected ? "is-live" : ""}`}>
+          <div className="chat-stage-head">
+            <span className={`chat-stage-dot ${streamConnected ? "is-live" : ""}`} />
+            <strong>执行阶段</strong>
+            <small>{sending ? (streamConnected ? "实时同步中" : "连接中...") : "本轮已结束"}</small>
+          </div>
+          <p className="chat-stage-current">{formatSubagentLabel(activeSubagent)}</p>
+          <ul className="chat-stage-list">
+            {streamItems.length === 0 ? (
+              <li className="chat-stage-empty">等待阶段事件...</li>
+            ) : (
+              streamItems.map((item) => (
+                <li key={`${item.id}-${item.event}`}>
+                  <span>{item.text}</span>
+                  <small>{formatTimeLabel(item.at)}</small>
+                </li>
+              ))
+            )}
+          </ul>
+        </section>
+      ) : null}
 
       {error ? <div className="chat-error">{error}</div> : null}
 
@@ -150,10 +287,102 @@ export function App() {
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
   const [inputValue, setInputValue] = useState("");
   const [chatError, setChatError] = useState("");
+  const [streamConnected, setStreamConnected] = useState(false);
+  const [activeSubagent, setActiveSubagent] = useState<string | null>(null);
+  const [streamItems, setStreamItems] = useState<StreamProgressItem[]>([]);
+
+  const streamRef = useRef<EventSource | null>(null);
 
   const activeSession = useMemo(
     () => sessions.find((session) => session.session_id === activeSessionId) ?? null,
     [sessions, activeSessionId]
+  );
+
+  const stopStream = useCallback(() => {
+    if (streamRef.current) {
+      streamRef.current.close();
+      streamRef.current = null;
+    }
+    setStreamConnected(false);
+  }, []);
+
+  const pushStreamEnvelope = useCallback((envelope: ChatStreamEnvelope) => {
+    setStreamItems((previous) => {
+      const next: StreamProgressItem = {
+        id: envelope.id,
+        event: envelope.event,
+        text: toProgressText(envelope),
+        at: envelope.at
+      };
+      const filtered = previous.filter((item) => item.id !== envelope.id);
+      return [...filtered.slice(-7), next];
+    });
+  }, []);
+
+  const startStream = useCallback(
+    (sessionId: string) => {
+      stopStream();
+      setStreamItems([]);
+      setActiveSubagent(null);
+      const source = new EventSource(buildChatStreamUrl(sessionId));
+      streamRef.current = source;
+
+      const handleEvent = (raw: Event) => {
+        const message = raw as MessageEvent<string>;
+        if (!message.data) {
+          return;
+        }
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(message.data);
+        } catch {
+          return;
+        }
+        if (!parsed || typeof parsed !== "object") {
+          return;
+        }
+        const envelope = parsed as ChatStreamEnvelope;
+        if (typeof envelope.id !== "number") {
+          return;
+        }
+        if (typeof envelope.event !== "string") {
+          return;
+        }
+        if (typeof envelope.data !== "object" || envelope.data === null) {
+          return;
+        }
+
+        if (envelope.event === "session.started") {
+          const current = envelope.data.active_subagent;
+          if (typeof current === "string" && current) {
+            setActiveSubagent(current);
+          }
+        }
+        if (envelope.event === "subagent.changed") {
+          const next = envelope.data.to_subagent ?? envelope.data.active_subagent;
+          if (typeof next === "string" && next) {
+            setActiveSubagent(next);
+          }
+        }
+
+        pushStreamEnvelope(envelope);
+
+        if (envelope.event === "assistant.completed" || envelope.event === "session.failed") {
+          stopStream();
+        }
+      };
+
+      source.onopen = () => {
+        setStreamConnected(true);
+      };
+      source.onerror = () => {
+        setStreamConnected(false);
+      };
+      STREAM_EVENT_NAMES.forEach((eventName) => {
+        source.addEventListener(eventName, handleEvent as EventListener);
+      });
+    },
+    [pushStreamEnvelope, stopStream]
   );
 
   async function loadSessionList(preferredSessionId?: string) {
@@ -164,6 +393,7 @@ export function App() {
       if (!rows.length) {
         setActiveSessionId(null);
         setTurns([]);
+        setActiveSubagent(null);
         return;
       }
       const targetId =
@@ -189,6 +419,10 @@ export function App() {
       const detail = await getChatSession(sessionId);
       setActiveSessionId(sessionId);
       setTurns(toVisibleTurns(detail.turns));
+      setActiveSubagent(detail.active_subagent || null);
+      if (!sending) {
+        setStreamItems([]);
+      }
     } catch (err) {
       setChatError(err instanceof Error ? err.message : "加载会话失败");
     } finally {
@@ -199,6 +433,12 @@ export function App() {
   useEffect(() => {
     void loadSessionList();
   }, []);
+
+  useEffect(() => {
+    return () => {
+      stopStream();
+    };
+  }, [stopStream]);
 
   function openChatView() {
     setViewMode("chat");
@@ -211,12 +451,15 @@ export function App() {
   }
 
   function startNewSession() {
+    stopStream();
     setViewMode("chat");
     setActiveSessionId(null);
     setTurns([]);
     setInputValue("");
     setChatError("");
     setSidebarOpen(false);
+    setActiveSubagent(null);
+    setStreamItems([]);
   }
 
   async function submitChat(event: FormEvent) {
@@ -226,13 +469,17 @@ export function App() {
       return;
     }
 
+    const sessionId = activeSessionId || makeSessionId();
+
     setSending(true);
     setChatError("");
     setInputValue("");
+    setActiveSessionId(sessionId);
+    startStream(sessionId);
 
     try {
       const response = await sendChat({
-        session_id: activeSessionId || undefined,
+        session_id: sessionId,
         message,
         page_size: 5
       });
@@ -241,8 +488,11 @@ export function App() {
     } catch (err) {
       setChatError(err instanceof Error ? err.message : "发送失败");
       setInputValue(message);
+      setStreamItems([]);
+      setActiveSubagent(null);
     } finally {
       setSending(false);
+      stopStream();
     }
   }
 
@@ -268,6 +518,8 @@ export function App() {
       if (isActive) {
         setActiveSessionId(null);
         setTurns([]);
+        setActiveSubagent(null);
+        setStreamItems([]);
       }
       await loadSessionList(isActive ? undefined : activeSessionId || undefined);
     } catch (err) {
@@ -306,7 +558,11 @@ export function App() {
 
         <div className="sidebar-history-head">
           <strong>历史会话</strong>
-          <button type="button" onClick={() => void loadSessionList(activeSessionId || undefined)} disabled={sessionsLoading}>
+          <button
+            type="button"
+            onClick={() => void loadSessionList(activeSessionId || undefined)}
+            disabled={sessionsLoading}
+          >
             刷新
           </button>
         </div>
@@ -322,6 +578,7 @@ export function App() {
                   active={item.session_id === activeSessionId}
                   deleting={deletingSessionId === item.session_id}
                   onClick={() => {
+                    stopStream();
                     setViewMode("chat");
                     void loadSession(item.session_id);
                     setSidebarOpen(false);
@@ -361,6 +618,9 @@ export function App() {
             onSubmit={submitChat}
             onQuickAsk={quickAsk}
             error={chatError}
+            streamConnected={streamConnected}
+            activeSubagent={activeSubagent}
+            streamItems={streamItems}
           />
         ) : (
           <ArcadeBrowser />

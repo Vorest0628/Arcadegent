@@ -116,3 +116,23 @@ export type ChatSessionDetail = {
   updated_at: string;
   turns: ChatHistoryTurn[];
 };
+
+export type ChatStreamEventName =
+  | "session.started"
+  | "subagent.changed"
+  | "assistant.token"
+  | "tool.started"
+  | "tool.progress"
+  | "tool.completed"
+  | "tool.failed"
+  | "navigation.route_ready"
+  | "assistant.completed"
+  | "session.failed";
+
+export type ChatStreamEnvelope = {
+  id: number;
+  session_id: string;
+  event: ChatStreamEventName;
+  at: string;
+  data: Record<string, unknown>;
+};

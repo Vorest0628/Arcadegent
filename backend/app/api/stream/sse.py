@@ -6,7 +6,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Header, Query
 from fastapi.responses import StreamingResponse
 
 from app.api.deps import get_container
@@ -24,10 +24,16 @@ def _format_sse(*, event: str, data: dict, event_id: int) -> str:
 async def stream(
     session_id: str,
     last_event_id: int | None = Query(default=None),
+    last_event_id_header: str | None = Header(default=None, alias="Last-Event-ID"),
     container: AppContainer = Depends(get_container),
 ) -> StreamingResponse:
     async def iterator() -> AsyncIterator[str]:
         cursor = last_event_id
+        if cursor is None and isinstance(last_event_id_header, str):
+            try:
+                cursor = int(last_event_id_header)
+            except ValueError:
+                cursor = None
         waited = 0
         while waited < container.settings.sse_max_wait_seconds:
             events = container.replay_buffer.list_events(session_id, cursor)
@@ -45,4 +51,3 @@ async def stream(
             await asyncio.sleep(container.settings.sse_keepalive_seconds)
 
     return StreamingResponse(iterator(), media_type="text/event-stream")
-

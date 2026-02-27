@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 EventName = Literal[
     "session.started",
+    "subagent.changed",
     "assistant.token",
     "tool.started",
     "tool.progress",
@@ -33,4 +34,3 @@ class StreamEvent(BaseModel):
     event: EventName
     at: str = Field(default_factory=utc_now_iso)
     data: dict[str, Any] = Field(default_factory=dict)
-

@@ -21,7 +21,7 @@ Arcadegent 是一个面向街机门店检索与问答的 Agent 应用，当前�
 
 ```bash
 # 后端（含测试依赖）
-cd agent
+cd backend
 python -m pip install -e ".[dev]"
 
 # 前端
@@ -35,7 +35,7 @@ cd ../..
 PowerShell:
 
 ```powershell
-cd agent
+cd backend
 $env:ARCADE_DATA_JSONL = "..\data\raw\bemanicn\shops_detail.jsonl"
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 --access-log
 ```
@@ -80,7 +80,7 @@ python scripts/etl/ingest_arcades.py \
 python -m pytest -q
 
 # 仅后端测试
-python -m pytest -q agent/app/tests
+python -m pytest -q backend/app/tests
 
 # 仅 ETL 测试
 python -m pytest -q scripts/etl/tests
@@ -99,7 +99,7 @@ cd apps/web && npm run build
 ## 项目结构
 
 ```text
-agent/                FastAPI 后端与 Agent 运行时
+backend/              FastAPI 后端与 Agent 运行时
 apps/web/             React + Vite 前端
 scripts/etl/          ETL 脚本与测试
 data/raw/             原始数据

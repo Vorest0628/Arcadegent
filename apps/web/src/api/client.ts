@@ -82,6 +82,12 @@ export async function sendChat(payload: ChatRequest): Promise<ChatResponse> {
   return postJson<ChatResponse>("/api/chat", payload);
 }
 
+export function buildChatStreamUrl(sessionId: string, lastEventId?: number): string {
+  return buildUrl(`/api/stream/${encodeURIComponent(sessionId)}`, {
+    last_event_id: typeof lastEventId === "number" ? lastEventId : undefined
+  });
+}
+
 export async function listChatSessions(limit = 40): Promise<ChatSessionSummary[]> {
   return fetchJson<ChatSessionSummary[]>(buildUrl("/api/v1/chat/sessions", { limit }));
 }
