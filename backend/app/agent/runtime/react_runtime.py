@@ -2,19 +2,19 @@
 
 from __future__ import annotations
 
-import json
 import re
 from datetime import datetime, timezone
 from uuid import uuid4
 
 from app.agent.context.context_builder import ContextBuilder
 from app.agent.events.replay_buffer import ReplayBuffer
-from app.agent.llm.provider_adapter import ModelToolCall, ProviderAdapter
+from app.agent.llm.provider_adapter import ProviderAdapter
 from app.agent.orchestration.transition_policy import TransitionPolicy
 from app.agent.runtime.loop_guard import LoopGuard
 from app.agent.runtime.session_state import AgentSessionState, AgentTurn, SessionStateStore
+from app.agent.runtime.tool_action_observer import ToolActionObserver
 from app.agent.subagents.subagent_builder import SubAgentBuilder
-from app.agent.tools.registry import ToolExecutionResult, ToolRegistry
+from app.agent.tools.registry import ToolRegistry
 from app.infra.observability.logger import get_logger
 from app.protocol.messages import (
     ArcadeShopSummaryDto,
@@ -80,6 +80,27 @@ def _short(text: str | None, *, limit: int = 120) -> str:
     return f"{compact[: max(1, limit - 3)].rstrip()}..."
 
 
+def _chunk_stream_text(text: str, *, max_chars: int = 18) -> list[str]:
+    """Split final reply into stable SSE chunks to avoid per-char event flooding."""
+    source = text if isinstance(text, str) else ""
+    if not source:
+        return []
+    chunks: list[str] = []
+    current: list[str] = []
+    for char in source:
+        current.append(char)
+        if char in {"\n", "\u3002", "\uff01", "\uff1f", ".", "!", "?"} or len(current) >= max_chars:
+            piece = "".join(current)
+            if piece:
+                chunks.append(piece)
+            current = []
+    if current:
+        piece = "".join(current)
+        if piece:
+            chunks.append(piece)
+    return chunks
+
+
 def _summary_row(raw: dict) -> ArcadeShopSummaryDto:
     """Map internal shop payload to API summary DTO."""
     return ArcadeShopSummaryDto(
@@ -130,9 +151,13 @@ class ReactRuntime:
         self._tool_registry = tool_registry
         self._provider_adapter = provider_adapter
         self._session_store = session_store
-        self._transition_policy = transition_policy
         self._replay_buffer = replay_buffer
         self._max_steps = max(2, max_steps)
+        self._tool_action_observer = ToolActionObserver(
+            tool_registry=tool_registry,
+            transition_policy=transition_policy,
+            replay_buffer=replay_buffer,
+        )
 
     def run_chat(self, request: ChatRequest) -> ChatResponse:
         """Session-aware chat execution with multi-turn tool loop."""
@@ -158,6 +183,7 @@ class ReactRuntime:
             state.working_memory["keyword"] = request.keyword
         else:
             state.working_memory["keyword"] = _extract_keyword(request.message)
+        state.working_memory["assistant_token_emitted"] = False
         logger.info(
             "chat.start session_id=%s turn_index=%s intent=%s keyword=%s message=%s",
             session_id,
@@ -184,10 +210,9 @@ class ReactRuntime:
                 "active_subagent": state.active_subagent,
             },
         )
-        self._emit_subagent_changed(
+        self._tool_action_observer.emit_session_subagent_started(
             session_id=session_id,
             to_subagent=state.active_subagent,
-            reason="session.started",
         )
 
         guard = LoopGuard(self._max_steps)
@@ -253,7 +278,7 @@ class ReactRuntime:
             )
 
             if model_response.tool_calls:
-                terminal_after_tools = self._execute_tool_calls(
+                terminal_after_tools = self._tool_action_observer.execute_tool_calls(
                     session_id=session_id,
                     state=state,
                     tool_calls=model_response.tool_calls,
@@ -280,6 +305,12 @@ class ReactRuntime:
             )
             final_text = self._fallback_reply(state, request)
 
+        if not bool(state.working_memory.get("assistant_token_emitted")):
+            self._emit_assistant_tokens(
+                session_id=session_id,
+                text=final_text,
+                active_subagent=state.active_subagent,
+            )
         self._append_turn(
             state,
             AgentTurn(
@@ -298,313 +329,6 @@ class ReactRuntime:
             _short(final_text, limit=160),
         )
         return self._build_response(session_id=session_id, state=state, final_text=final_text)
-
-    def _execute_tool_calls(
-        self,
-        *,
-        session_id: str,
-        state: AgentSessionState,
-        tool_calls: list[ModelToolCall],
-        allowed_tools: list[str],
-    ) -> bool:
-        """Execute tool calls sequentially and return terminal flag."""
-        terminal = False
-        for call in tool_calls:
-            prepared_args, hydrated_fields = self._prepare_tool_arguments(
-                state=state,
-                tool_name=call.name,
-                raw_arguments=call.arguments,
-            )
-            logger.info(
-                "tool.call session_id=%s tool=%s call_id=%s args=%s",
-                session_id,
-                call.name,
-                call.call_id,
-                _short(json.dumps(prepared_args, ensure_ascii=False), limit=220),
-            )
-            if hydrated_fields:
-                logger.debug(
-                    "tool.call.hydrated session_id=%s tool=%s call_id=%s fields=%s",
-                    session_id,
-                    call.name,
-                    call.call_id,
-                    hydrated_fields,
-                )
-            self._replay_buffer.append(
-                session_id,
-                "tool.started",
-                {
-                    "tool": call.name,
-                    "call_id": call.call_id,
-                    "active_subagent": state.active_subagent,
-                },
-            )
-            result = self._tool_registry.execute(
-                call_id=call.call_id,
-                tool_name=call.name,
-                raw_arguments=prepared_args,
-                allowed_tools=allowed_tools,
-            )
-            self._record_tool_result(session_id=session_id, state=state, result=result)
-            if self._transition_policy.is_terminal_tool(
-                tool_name=result.tool_name,
-                tool_status=result.status,
-            ):
-                terminal = True
-        return terminal
-
-    def _prepare_tool_arguments(
-        self,
-        *,
-        state: AgentSessionState,
-        tool_name: str,
-        raw_arguments: dict[str, object],
-    ) -> tuple[dict[str, object], list[str]]:
-        if tool_name != "summary_tool":
-            return dict(raw_arguments), []
-
-        args = dict(raw_arguments)
-        hydrated: list[str] = []
-
-        topic = args.get("topic")
-        if topic not in {"search", "navigation"}:
-            inferred_topic = "navigation" if bool(state.working_memory.get("route")) else "search"
-            args["topic"] = inferred_topic
-            topic = inferred_topic
-            hydrated.append("topic")
-
-        if topic == "navigation":
-            if not isinstance(args.get("route"), dict):
-                route = state.working_memory.get("route")
-                if isinstance(route, dict):
-                    args["route"] = route
-                    hydrated.append("route")
-            shop_name = args.get("shop_name")
-            if not isinstance(shop_name, str) or not shop_name.strip():
-                shop_value = state.working_memory.get("shop")
-                candidate_name: str | None = None
-                if isinstance(shop_value, dict):
-                    name = shop_value.get("name")
-                    if isinstance(name, str) and name.strip():
-                        candidate_name = name.strip()
-                if candidate_name is None:
-                    shops_value = state.working_memory.get("shops")
-                    if isinstance(shops_value, list) and shops_value:
-                        first = shops_value[0]
-                        if isinstance(first, dict):
-                            name = first.get("name")
-                            if isinstance(name, str) and name.strip():
-                                candidate_name = name.strip()
-                if candidate_name is not None:
-                    args["shop_name"] = candidate_name
-                    hydrated.append("shop_name")
-            return args, hydrated
-
-        if args.get("total") is None:
-            total = state.working_memory.get("total")
-            if isinstance(total, int):
-                args["total"] = total
-                hydrated.append("total")
-        if not isinstance(args.get("shops"), list):
-            shops = state.working_memory.get("shops")
-            if isinstance(shops, list):
-                args["shops"] = shops
-                hydrated.append("shops")
-        keyword = args.get("keyword")
-        if not isinstance(keyword, str) or not keyword.strip():
-            memory_keyword = state.working_memory.get("keyword")
-            if isinstance(memory_keyword, str) and memory_keyword.strip():
-                args["keyword"] = memory_keyword.strip()
-                hydrated.append("keyword")
-        return args, hydrated
-
-    def _record_tool_result(
-        self,
-        *,
-        session_id: str,
-        state: AgentSessionState,
-        result: ToolExecutionResult,
-    ) -> None:
-        """Record tool result into replay buffer and session state."""
-        previous_subagent = state.active_subagent
-        if result.status == "completed":
-            completed_payload: dict[str, object] = {
-                "tool": result.tool_name,
-                "call_id": result.call_id,
-                "active_subagent": previous_subagent,
-            }
-            if result.tool_name == "route_plan_tool":
-                route = result.output.get("route")
-                if isinstance(route, dict):
-                    completed_payload["distance_m"] = route.get("distance_m")
-                    self._replay_buffer.append(session_id, "navigation.route_ready", route)
-            self._replay_buffer.append(session_id, "tool.completed", completed_payload)
-            if result.tool_name == "db_query_tool":
-                total = int(result.output.get("total") or 0)
-                logger.info(
-                    "tool.completed session_id=%s tool=%s total=%s",
-                    session_id,
-                    result.tool_name,
-                    total,
-                )
-            else:
-                logger.info(
-                    "tool.completed session_id=%s tool=%s",
-                    session_id,
-                    result.tool_name,
-                )
-            logger.debug(
-                "tool.observe session_id=%s tool=%s status=%s output_keys=%s output_preview=%s",
-                session_id,
-                result.tool_name,
-                result.status,
-                sorted(list(result.output.keys())),
-                self._tool_output_preview(result.output),
-            )
-        else:
-            error_message = result.error_message
-            if not isinstance(error_message, str) or not error_message:
-                error_message = "tool execution failed"
-            self._replay_buffer.append(
-                session_id,
-                "tool.failed",
-                {
-                    "tool": result.tool_name,
-                    "call_id": result.call_id,
-                    "error": error_message,
-                    "active_subagent": previous_subagent,
-                },
-            )
-            logger.warning(
-                "tool.failed session_id=%s tool=%s error=%s",
-                session_id,
-                result.tool_name,
-                _short(error_message, limit=160),
-            )
-            logger.debug(
-                "tool.observe session_id=%s tool=%s status=%s output_keys=%s output_preview=%s",
-                session_id,
-                result.tool_name,
-                result.status,
-                sorted(list(result.output.keys())),
-                self._tool_output_preview(result.output),
-            )
-
-        self._append_turn(
-            state,
-            AgentTurn(
-                role="tool",
-                name=result.tool_name,
-                call_id=result.call_id,
-                content=json.dumps(result.output, ensure_ascii=False),
-                payload={"status": result.status, "result": result.output},
-            ),
-        )
-        self._apply_tool_memory(state=state, result=result)
-        next_subagent = self._transition_policy.next_subagent(
-            current_subagent=state.active_subagent,
-            tool_name=result.tool_name,
-            tool_status=result.status,
-            tool_output=result.output,
-            fallback_intent=state.intent,
-            has_route=bool(state.working_memory.get("route")),
-            has_shops=bool(state.working_memory.get("shops"))
-            or bool(state.working_memory.get("shop")),
-        )
-        state.active_subagent = next_subagent
-        shops_payload = state.working_memory.get("shops")
-        shops_count = len(shops_payload) if isinstance(shops_payload, list) else 0
-        logger.debug(
-            "tool.memory session_id=%s tool=%s status=%s has_shop=%s shops=%s total=%s has_route=%s has_reply=%s next_subagent=%s",
-            session_id,
-            result.tool_name,
-            result.status,
-            isinstance(state.working_memory.get("shop"), dict),
-            shops_count,
-            state.working_memory.get("total"),
-            bool(state.working_memory.get("route")),
-            bool(str(state.working_memory.get("reply") or "").strip()),
-            state.active_subagent,
-        )
-        if previous_subagent != state.active_subagent:
-            self._emit_subagent_changed(
-                session_id=session_id,
-                from_subagent=previous_subagent,
-                to_subagent=state.active_subagent,
-                reason="tool.transition",
-                tool_name=result.tool_name,
-                tool_status=result.status,
-            )
-            logger.debug(
-                "chat.transition session_id=%s from=%s tool=%s status=%s to=%s",
-                session_id,
-                previous_subagent,
-                result.tool_name,
-                result.status,
-                state.active_subagent,
-            )
-
-    def _apply_tool_memory(self, *, state: AgentSessionState, result: ToolExecutionResult) -> None:
-        """Merge tool output into session working memory."""
-        if result.tool_name == "select_next_subagent" and result.status == "completed":
-            next_subagent = result.output.get("next_subagent")
-            if isinstance(next_subagent, str) and next_subagent:
-                state.working_memory["next_subagent_candidate"] = next_subagent
-            next_intent = result.output.get("intent")
-            if isinstance(next_intent, str):
-                state.intent = _normalize_intent(next_intent)
-            done = result.output.get("done")
-            if isinstance(done, bool):
-                state.working_memory["subagent_done"] = done
-            return
-
-        if result.status != "completed":
-            state.working_memory["last_error"] = result.output.get("error")
-            return
-
-        if result.tool_name == "db_query_tool":
-            shop_payload = result.output.get("shop")
-            if isinstance(shop_payload, dict):
-                state.working_memory["shop"] = shop_payload
-                source_id = shop_payload.get("source_id")
-                if source_id is not None:
-                    state.working_memory["last_shop_id"] = source_id
-                return
-            shops = result.output.get("shops")
-            if isinstance(shops, list):
-                state.working_memory["shops"] = shops
-                if shops:
-                    first = shops[0] if isinstance(shops[0], dict) else None
-                    if isinstance(first, dict) and first.get("source_id") is not None:
-                        state.working_memory["last_shop_id"] = first.get("source_id")
-            total = result.output.get("total")
-            if total is not None:
-                state.working_memory["total"] = int(total)
-            last_request = state.working_memory.get("last_request")
-            if isinstance(last_request, dict):
-                state.working_memory["keyword"] = last_request.get("keyword") or _extract_keyword(
-                    str(last_request.get("message") or "")
-                )
-            return
-
-        if result.tool_name == "geo_resolve_tool":
-            provider = result.output.get("provider")
-            if isinstance(provider, str):
-                state.working_memory["provider"] = provider
-            return
-
-        if result.tool_name == "route_plan_tool":
-            route = result.output.get("route")
-            if isinstance(route, dict):
-                state.working_memory["route"] = route
-                state.intent = "navigate"
-            return
-
-        if result.tool_name == "summary_tool":
-            reply = result.output.get("reply")
-            if isinstance(reply, str) and reply.strip():
-                state.working_memory["reply"] = reply.strip()
-            return
 
     def _fallback_reply(self, state: AgentSessionState, request: ChatRequest) -> str:
         """Fallback reply to guarantee API always returns text."""
@@ -671,48 +395,30 @@ class ReactRuntime:
         state.turns.append(turn)
         state.updated_at = _utc_now_iso()
 
-    def _tool_output_preview(self, output: dict[str, object]) -> str:
-        if not output:
-            return "{}"
-        total = output.get("total")
-        if isinstance(total, int):
-            shops = output.get("shops")
-            if isinstance(shops, list):
-                return f"total={total},shops={len(shops)}"
-            return f"total={total}"
-        reply = output.get("reply")
-        if isinstance(reply, str):
-            return f"reply={_short(reply, limit=120)}"
-        route = output.get("route")
-        if isinstance(route, dict):
-            distance = route.get("distance_m")
-            duration = route.get("duration_s")
-            return f"route(distance_m={distance},duration_s={duration})"
-        provider = output.get("provider")
-        if isinstance(provider, str):
-            return f"provider={provider}"
-        return _short(json.dumps(output, ensure_ascii=False), limit=220)
-
-    def _emit_subagent_changed(
+    def _emit_assistant_tokens(
         self,
         *,
         session_id: str,
-        to_subagent: str,
-        reason: str,
-        from_subagent: str | None = None,
-        tool_name: str | None = None,
-        tool_status: str | None = None,
+        text: str,
+        active_subagent: str,
     ) -> None:
-        payload: dict[str, object] = {
-            "active_subagent": to_subagent,
-            "to_subagent": to_subagent,
-            "reason": reason,
-        }
-        if from_subagent:
-            payload["from_subagent"] = from_subagent
-        if tool_name:
-            payload["tool"] = tool_name
-        if tool_status:
-            payload["tool_status"] = tool_status
-        self._replay_buffer.append(session_id, "subagent.changed", payload)
+        chunks = _chunk_stream_text(text)
+        if not chunks:
+            return
+        total = len(chunks)
+        merged = ""
+        for idx, chunk in enumerate(chunks, start=1):
+            merged += chunk
+            self._replay_buffer.append(
+                session_id,
+                "assistant.token",
+                {
+                    "delta": chunk,
+                    "content": merged,
+                    "index": idx,
+                    "total": total,
+                    "active_subagent": active_subagent,
+                    "text_preview": _short(merged, limit=120),
+                },
+            )
 

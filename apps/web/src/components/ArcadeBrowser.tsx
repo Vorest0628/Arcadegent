@@ -1,6 +1,6 @@
 ﻿import { FormEvent, useEffect, useMemo, useState } from "react";
 import { getArcadeDetail, listArcades, listCities, listCounties, listProvinces } from "../api/client";
-import type { ArcadeDetail, ArcadeSummary, PagedArcades, RegionItem } from "../types";
+import type { ArcadeDetail, ArcadeSortBy, ArcadeSummary, PagedArcades, RegionItem, SortOrder } from "../types";
 
 function usePagedState(): [PagedArcades, (payload: PagedArcades) => void] {
   const [data, setData] = useState<PagedArcades>({
@@ -21,6 +21,10 @@ export function ArcadeBrowser() {
   const [provinceCode, setProvinceCode] = useState("");
   const [cityCode, setCityCode] = useState("");
   const [countyCode, setCountyCode] = useState("");
+  const [hasArcadesOnly, setHasArcadesOnly] = useState(true);
+  const [sortBy, setSortBy] = useState<ArcadeSortBy>("default");
+  const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
+  const [sortTitleName, setSortTitleName] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [detail, setDetail] = useState<ArcadeDetail | null>(null);
@@ -75,6 +79,10 @@ export function ArcadeBrowser() {
         province_code: provinceCode || undefined,
         city_code: cityCode || undefined,
         county_code: countyCode || undefined,
+        has_arcades: hasArcadesOnly ? true : undefined,
+        sort_by: sortBy,
+        sort_order: sortOrder,
+        sort_title_name: sortBy === "title_quantity" ? sortTitleName.trim() || undefined : undefined,
         page,
         page_size: pageSize
       });
@@ -161,6 +169,40 @@ export function ArcadeBrowser() {
                 ))}
               </select>
             </label>
+            <label className="browser-field">
+              Sort By
+              <select value={sortBy} onChange={(e) => setSortBy(e.target.value as ArcadeSortBy)}>
+                <option value="default">Default</option>
+                <option value="title_quantity">Title Qty (arcades[].quantity)</option>
+                <option value="arcade_count">Title Type Count</option>
+                <option value="updated_at">Updated At</option>
+                <option value="source_id">Source ID</option>
+              </select>
+            </label>
+            <label className="browser-field">
+              Sort Order
+              <select value={sortOrder} onChange={(e) => setSortOrder(e.target.value as SortOrder)}>
+                <option value="desc">Desc</option>
+                <option value="asc">Asc</option>
+              </select>
+            </label>
+            <label className="browser-field">
+              Title Name
+              <input
+                value={sortTitleName}
+                onChange={(e) => setSortTitleName(e.target.value)}
+                placeholder="maimai / sdvx"
+                disabled={sortBy !== "title_quantity"}
+              />
+            </label>
+            <label className="browser-check">
+              <input
+                type="checkbox"
+                checked={hasArcadesOnly}
+                onChange={(e) => setHasArcadesOnly(e.target.checked)}
+              />
+              Has titles only
+            </label>
             <button type="submit" disabled={loading} className="browser-primary-btn">
               {loading ? "Searching..." : "Search"}
             </button>
@@ -170,7 +212,12 @@ export function ArcadeBrowser() {
 
           <div className="browser-list-header">
             <strong>Results</strong>
-            <span>{pageHint}</span>
+            <span>
+              {pageHint}
+              {sortBy === "title_quantity" && sortTitleName.trim()
+                ? ` | ${sortTitleName.trim()} ${sortOrder.toUpperCase()}`
+                : ""}
+            </span>
           </div>
 
           <ul className="browser-result-list">

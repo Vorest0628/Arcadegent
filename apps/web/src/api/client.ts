@@ -1,11 +1,13 @@
 import type {
   ArcadeDetail,
+  ArcadeSortBy,
   ChatRequest,
   ChatResponse,
   ChatSessionDetail,
   ChatSessionSummary,
   PagedArcades,
-  RegionItem
+  RegionItem,
+  SortOrder
 } from "../types";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
@@ -56,6 +58,10 @@ export async function listArcades(params: {
   province_code?: string;
   city_code?: string;
   county_code?: string;
+  has_arcades?: boolean;
+  sort_by?: ArcadeSortBy;
+  sort_order?: SortOrder;
+  sort_title_name?: string;
   page?: number;
   page_size?: number;
 }): Promise<PagedArcades> {

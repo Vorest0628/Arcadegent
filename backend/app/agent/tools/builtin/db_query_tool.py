@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Literal
 from typing import Any
 
 from app.infra.db.local_store import LocalArcadeStore
@@ -26,6 +27,9 @@ class DBQueryTool:
         has_arcades: bool | None,
         page: int,
         page_size: int,
+        sort_by: str,
+        sort_order: Literal["asc", "desc"] | str,
+        sort_title_name: str | None,
     ) -> tuple[list[dict[str, Any]], int]:
         return self._store.list_shops(
             keyword=keyword,
@@ -38,6 +42,9 @@ class DBQueryTool:
             has_arcades=has_arcades,
             page=page,
             page_size=page_size,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            sort_title_name=sort_title_name,
         )
 
     def get_shop(self, source_id: int) -> dict[str, Any] | None:

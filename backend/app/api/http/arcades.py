@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from math import ceil
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -49,6 +50,11 @@ def list_arcades(
     city_code: str | None = Query(default=None),
     county_code: str | None = Query(default=None),
     has_arcades: bool | None = Query(default=None),
+    sort_by: Literal["default", "updated_at", "source_id", "arcade_count", "title_quantity"] = Query(
+        default="default"
+    ),
+    sort_order: Literal["asc", "desc"] = Query(default="desc"),
+    sort_title_name: str | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     container: AppContainer = Depends(get_container),
@@ -61,6 +67,9 @@ def list_arcades(
         has_arcades=has_arcades,
         page=page,
         page_size=page_size,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        sort_title_name=sort_title_name,
     )
     items = [_summary_dto(row) for row in rows]
     total_pages = ceil(total / page_size) if total > 0 else 0
@@ -114,4 +123,3 @@ def get_arcade_detail(
         collab=row.get("collab"),
         raw=row.get("raw"),
     )
-

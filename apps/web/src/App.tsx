@@ -88,6 +88,17 @@ function formatToolLabel(toolName: string | undefined): string {
   return TOOL_LABEL[toolName] ?? toolName;
 }
 
+function shortText(value: string, limit = 48): string {
+  const compact = value.replace(/\s+/g, " ").trim();
+  if (!compact) {
+    return "";
+  }
+  if (compact.length <= limit) {
+    return compact;
+  }
+  return `${compact.slice(0, Math.max(1, limit - 3))}...`;
+}
+
 function toProgressText(envelope: ChatStreamEnvelope): string {
   const toolNameRaw = envelope.data.tool;
   const toolName = typeof toolNameRaw === "string" ? toolNameRaw : undefined;
@@ -100,6 +111,10 @@ function toProgressText(envelope: ChatStreamEnvelope): string {
     return `切换到 ${formatSubagentLabel(next)}`;
   }
   if (envelope.event === "assistant.token") {
+    const previewRaw = envelope.data.text_preview ?? envelope.data.content ?? envelope.data.delta;
+    if (typeof previewRaw === "string" && previewRaw.trim()) {
+      return `正在生成回复：${shortText(previewRaw, 56)}`;
+    }
     return "正在生成回复";
   }
   if (envelope.event === "tool.started") {
@@ -172,7 +187,10 @@ function ChatPanel({
   error,
   streamConnected,
   activeSubagent,
-  streamItems
+  streamItems,
+  streamReplyTarget,
+  streamReply,
+  streamReplyActive
 }: {
   turns: ChatHistoryTurn[];
   loading: boolean;
@@ -185,12 +203,40 @@ function ChatPanel({
   streamConnected: boolean;
   activeSubagent: string | null;
   streamItems: StreamProgressItem[];
+  streamReplyTarget: string;
+  streamReply: string;
+  streamReplyActive: boolean;
 }) {
   const endRef = useRef<HTMLDivElement | null>(null);
+  const turnsForRender = useMemo(() => {
+    if (!streamReplyActive || !streamReplyTarget.trim()) {
+      return turns;
+    }
+    if (!turns.length) {
+      return turns;
+    }
+    const last = turns[turns.length - 1];
+    if (last.role === "assistant" && last.content === streamReplyTarget) {
+      return turns.slice(0, -1);
+    }
+    return turns;
+  }, [streamReplyActive, streamReplyTarget, turns]);
+  const lastAssistantReply = useMemo(() => {
+    for (let idx = turnsForRender.length - 1; idx >= 0; idx -= 1) {
+      const turn = turnsForRender[idx];
+      if (turn.role === "assistant") {
+        return turn.content;
+      }
+    }
+    return "";
+  }, [turnsForRender]);
+  const showStreamReply =
+    streamReply.trim().length > 0 &&
+    (streamReplyActive || !lastAssistantReply || !lastAssistantReply.startsWith(streamReply));
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [turns, loading, sending, streamItems]);
+  }, [turnsForRender, loading, sending, streamItems, streamReply]);
 
   return (
     <div className="chat-view">
@@ -215,7 +261,7 @@ function ChatPanel({
           </div>
         ) : (
           <ul className="chat-message-list">
-            {turns.map((turn, index) => (
+            {turnsForRender.map((turn, index) => (
               <li
                 key={`${turn.created_at}-${index}`}
                 className={`chat-message ${turn.role}`}
@@ -227,6 +273,21 @@ function ChatPanel({
                 </div>
               </li>
             ))}
+            {showStreamReply ? (
+              <li
+                key="streaming-assistant"
+                className="chat-message assistant streaming"
+                style={{ animationDelay: `${Math.min(turnsForRender.length, 8) * 45}ms` }}
+              >
+                <div className="chat-bubble">
+                  <p>
+                    {streamReply}
+                    {streamReplyActive ? <span className="chat-stream-caret" aria-hidden="true" /> : null}
+                  </p>
+                  <small>{streamReplyActive ? "生成中..." : "已生成"}</small>
+                </div>
+              </li>
+            ) : null}
           </ul>
         )}
 
@@ -290,6 +351,8 @@ export function App() {
   const [streamConnected, setStreamConnected] = useState(false);
   const [activeSubagent, setActiveSubagent] = useState<string | null>(null);
   const [streamItems, setStreamItems] = useState<StreamProgressItem[]>([]);
+  const [streamReplyTarget, setStreamReplyTarget] = useState("");
+  const [streamReplyDisplay, setStreamReplyDisplay] = useState("");
 
   const streamRef = useRef<EventSource | null>(null);
 
@@ -306,15 +369,44 @@ export function App() {
     setStreamConnected(false);
   }, []);
 
+  const resetStreamReply = useCallback(() => {
+    setStreamReplyTarget("");
+    setStreamReplyDisplay("");
+  }, []);
+
+  useEffect(() => {
+    if (!streamReplyTarget) {
+      if (streamReplyDisplay) {
+        setStreamReplyDisplay("");
+      }
+      return;
+    }
+    if (streamReplyDisplay === streamReplyTarget) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      if (!streamReplyTarget.startsWith(streamReplyDisplay)) {
+        setStreamReplyDisplay(streamReplyTarget);
+        return;
+      }
+      const nextLength = Math.min(streamReplyDisplay.length + 1, streamReplyTarget.length);
+      setStreamReplyDisplay(streamReplyTarget.slice(0, nextLength));
+    }, 16);
+    return () => window.clearTimeout(timer);
+  }, [streamReplyDisplay, streamReplyTarget]);
+
   const pushStreamEnvelope = useCallback((envelope: ChatStreamEnvelope) => {
     setStreamItems((previous) => {
+      const collapseEvent = envelope.event === "assistant.token" || envelope.event === "tool.progress";
       const next: StreamProgressItem = {
         id: envelope.id,
         event: envelope.event,
         text: toProgressText(envelope),
         at: envelope.at
       };
-      const filtered = previous.filter((item) => item.id !== envelope.id);
+      const filtered = previous.filter(
+        (item) => item.id !== envelope.id && !(collapseEvent && item.event === envelope.event)
+      );
       return [...filtered.slice(-7), next];
     });
   }, []);
@@ -324,6 +416,7 @@ export function App() {
       stopStream();
       setStreamItems([]);
       setActiveSubagent(null);
+      resetStreamReply();
       const source = new EventSource(buildChatStreamUrl(sessionId));
       streamRef.current = source;
 
@@ -364,6 +457,23 @@ export function App() {
             setActiveSubagent(next);
           }
         }
+        if (envelope.event === "assistant.token") {
+          const fullText = envelope.data.content;
+          if (typeof fullText === "string") {
+            setStreamReplyTarget(fullText);
+          } else {
+            const delta = envelope.data.delta;
+            if (typeof delta === "string" && delta) {
+              setStreamReplyTarget((previous) => previous + delta);
+            }
+          }
+        }
+        if (envelope.event === "assistant.completed") {
+          const reply = envelope.data.reply;
+          if (typeof reply === "string" && reply) {
+            setStreamReplyTarget(reply);
+          }
+        }
 
         pushStreamEnvelope(envelope);
 
@@ -382,7 +492,7 @@ export function App() {
         source.addEventListener(eventName, handleEvent as EventListener);
       });
     },
-    [pushStreamEnvelope, stopStream]
+    [pushStreamEnvelope, resetStreamReply, stopStream]
   );
 
   async function loadSessionList(preferredSessionId?: string) {
@@ -422,6 +532,7 @@ export function App() {
       setActiveSubagent(detail.active_subagent || null);
       if (!sending) {
         setStreamItems([]);
+        resetStreamReply();
       }
     } catch (err) {
       setChatError(err instanceof Error ? err.message : "加载会话失败");
@@ -460,6 +571,7 @@ export function App() {
     setSidebarOpen(false);
     setActiveSubagent(null);
     setStreamItems([]);
+    resetStreamReply();
   }
 
   async function submitChat(event: FormEvent) {
@@ -490,9 +602,10 @@ export function App() {
       setInputValue(message);
       setStreamItems([]);
       setActiveSubagent(null);
+      resetStreamReply();
+      stopStream();
     } finally {
       setSending(false);
-      stopStream();
     }
   }
 
@@ -520,6 +633,7 @@ export function App() {
         setTurns([]);
         setActiveSubagent(null);
         setStreamItems([]);
+        resetStreamReply();
       }
       await loadSessionList(isActive ? undefined : activeSessionId || undefined);
     } catch (err) {
@@ -621,6 +735,13 @@ export function App() {
             streamConnected={streamConnected}
             activeSubagent={activeSubagent}
             streamItems={streamItems}
+            streamReplyTarget={streamReplyTarget}
+            streamReply={streamReplyDisplay}
+            streamReplyActive={
+              sending ||
+              streamConnected ||
+              streamReplyDisplay.length < streamReplyTarget.length
+            }
           />
         ) : (
           <ArcadeBrowser />

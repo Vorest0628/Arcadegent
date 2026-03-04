@@ -49,6 +49,22 @@ class DBQueryArgs(_StrictModel):
         default=None,
         description="Whether to require rows containing at least one title.",
     )
+    sort_by: Literal["default", "updated_at", "source_id", "arcade_count", "title_quantity"] = Field(
+        default="default",
+        description=(
+            "Sort field. `title_quantity` sorts by machine `quantity`(qty) for one title; "
+            "`arcade_count` sorts by number of distinct title entries in one shop. "
+            "Use `default` to keep built-in deterministic order."
+        ),
+    )
+    sort_order: Literal["asc", "desc"] = Field(
+        default="desc",
+        description="Sort direction for `sort_by`.",
+    )
+    sort_title_name: str | None = Field(
+        default=None,
+        description="When `sort_by=title_quantity`, provide title name, e.g. `maimai` or `sdvx`.",
+    )
     page: int = Field(ge=1)
     page_size: int = Field(ge=1, le=50)
     shop_id: int | None = None
@@ -70,6 +86,9 @@ class SummaryArgs(_StrictModel):
     keyword: str | None = None
     total: int | None = None
     shops: list[dict[str, Any]] | None = None
+    sort_by: Literal["default", "updated_at", "source_id", "arcade_count", "title_quantity"] | None = None
+    sort_order: Literal["asc", "desc"] | None = None
+    sort_title_name: str | None = None
     shop_name: str | None = None
     route: dict[str, Any] | None = None
 
@@ -95,7 +114,8 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "db_query_tool": (
         "Search arcade shops by keyword and region. "
         "Use *_code for 12-digit region codes, or *_name for natural-language region names. "
-        "Can also fetch one shop by shop_id."
+        "Can also fetch one shop by shop_id. "
+        "Supports sorting via sort_by/sort_order/sort_title_name."
     ),
     "geo_resolve_tool": "Resolve map provider by province code.",
     "route_plan_tool": "Plan a route from origin to destination.",

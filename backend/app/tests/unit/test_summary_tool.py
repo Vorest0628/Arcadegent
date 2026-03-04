@@ -46,3 +46,53 @@ def test_summary_tool_keeps_llm_reply_when_no_results() -> None:
         shops=[],
     )
     assert text == "\u62b1\u6b49\uff0c\u672a\u67e5\u5230\u7b26\u5408\u6761\u4ef6\u7684\u673a\u5385\u3002"
+
+
+def test_summary_tool_uses_deterministic_text_for_title_quantity_sorting() -> None:
+    tool = SummaryTool(llm_client=_StubLLM("ignored"))  # type: ignore[arg-type]
+    text = tool.summarize_search(
+        keyword="maimai",
+        total=12,
+        shops=[
+            {
+                "name": "A",
+                "city_name": "Shanghai",
+                "arcades": [{"title_name": "maimai", "quantity": 3}],
+            },
+            {
+                "name": "B",
+                "city_name": "Shanghai",
+                "arcades": [{"title_name": "maimai", "quantity": 2}],
+            },
+        ],
+        sort_by="title_quantity",
+        sort_order="desc",
+        sort_title_name="maimai",
+    )
+    assert "\u5171\u627e\u5230 12 \u5bb6\u673a\u5385" in text
+    assert "maimai" in text
+    assert "3\u53f0" in text
+
+
+def test_summary_tool_title_quantity_uses_alias_matching() -> None:
+    tool = SummaryTool(llm_client=_StubLLM("ignored"))  # type: ignore[arg-type]
+    text = tool.summarize_search(
+        keyword="sdvx",
+        total=2,
+        shops=[
+            {
+                "name": "A",
+                "city_name": "Shanghai",
+                "arcades": [{"title_name": "SOUND VOLTEX EXCEED GEAR", "quantity": 5}],
+            },
+            {
+                "name": "B",
+                "city_name": "Shanghai",
+                "arcades": [{"title_name": "maimai DX", "quantity": 3}],
+            },
+        ],
+        sort_by="title_quantity",
+        sort_order="desc",
+        sort_title_name="sdvx",
+    )
+    assert "5\u53f0" in text

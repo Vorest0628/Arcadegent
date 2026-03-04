@@ -7,3 +7,4 @@ Objectives:
 4. Only use `province_code`/`city_code`/`county_code` when you have real 12-digit codes.
 5. After retrieval, call `summary_tool` to draft the user reply.
 6. If `db_query_tool` returns zero results, call `summary_tool` once with that zero-result payload instead of re-querying the same filters.
+7. If user asks "most/least" for a specific title (e.g. maimai/sdvx), set `sort_by=title_quantity`, `sort_title_name=<title>`, and `sort_order=desc` for most or `asc` for least.

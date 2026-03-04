@@ -6,7 +6,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 
 @dataclass(frozen=True)
@@ -77,6 +77,96 @@ def _keyword_terms(keyword: str | None) -> list[str]:
     # Keep term order while deduplicating to preserve matching signal.
     deduped = list(dict.fromkeys(parts))
     return deduped
+
+
+_SORT_BY_VALUES = {"default", "updated_at", "source_id", "arcade_count", "title_quantity"}
+_SORT_ORDER_VALUES = {"asc", "desc"}
+
+
+def _normalize_title_name(value: str | None) -> str:
+    if not value:
+        return ""
+    text = str(value).strip().lower()
+    text = re.sub(r"[\s_\-./]+", "", text)
+    if "舞萌" in text or text.startswith("maimai"):
+        return "maimai"
+    if text.startswith("soundvoltex") or text == "sdvx":
+        return "sdvx"
+    return text
+
+
+def _title_quantity(row: dict[str, Any], title_name_norm: str) -> int:
+    if not title_name_norm:
+        return 0
+    total = 0
+    for item in row.get("arcades") or []:
+        if not isinstance(item, dict):
+            continue
+        if _normalize_title_name(item.get("title_name")) != title_name_norm:
+            continue
+        total += int(_as_int(item.get("quantity")) or 0)
+    return total
+
+
+def _sort_shops(
+    items: list[dict[str, Any]],
+    *,
+    sort_by: str,
+    sort_order: Literal["asc", "desc"] | str,
+    sort_title_name: str | None,
+) -> list[dict[str, Any]]:
+    normalized_by = (sort_by or "default").strip().lower()
+    if normalized_by not in _SORT_BY_VALUES:
+        normalized_by = "default"
+
+    normalized_order = (sort_order or "desc").strip().lower()
+    if normalized_order not in _SORT_ORDER_VALUES:
+        normalized_order = "desc"
+    reverse = normalized_order == "desc"
+
+    if normalized_by == "default":
+        return items
+
+    if normalized_by == "title_quantity":
+        title_name_norm = _normalize_title_name(sort_title_name)
+        if not title_name_norm:
+            return items
+        return sorted(
+            items,
+            key=lambda row: (
+                _title_quantity(row, title_name_norm),
+                str(row.get("updated_at") or ""),
+                int(row.get("source_id") or 0),
+            ),
+            reverse=reverse,
+        )
+
+    if normalized_by == "arcade_count":
+        return sorted(
+            items,
+            key=lambda row: (
+                int(row.get("arcade_count") or 0),
+                str(row.get("updated_at") or ""),
+                int(row.get("source_id") or 0),
+            ),
+            reverse=reverse,
+        )
+
+    if normalized_by == "updated_at":
+        return sorted(
+            items,
+            key=lambda row: (
+                str(row.get("updated_at") or ""),
+                int(row.get("source_id") or 0),
+            ),
+            reverse=reverse,
+        )
+
+    return sorted(
+        items,
+        key=lambda row: int(row.get("source_id") or 0),
+        reverse=reverse,
+    )
 
 
 def _normalize_region_name(value: str | None) -> str:
@@ -283,6 +373,9 @@ class LocalArcadeStore:
         province_name: str | None = None,
         city_name: str | None = None,
         county_name: str | None = None,
+        sort_by: str = "default",
+        sort_order: Literal["asc", "desc"] | str = "desc",
+        sort_title_name: str | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
         """Filter and paginate shop list with deterministic order."""
         items: list[dict[str, Any]] = []
@@ -318,6 +411,12 @@ class LocalArcadeStore:
                 continue
             items.append(row)
 
+        items = _sort_shops(
+            items,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            sort_title_name=sort_title_name,
+        )
         total = len(items)
         start = max(0, (page - 1) * page_size)
         end = start + page_size

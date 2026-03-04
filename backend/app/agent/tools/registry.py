@@ -155,6 +155,13 @@ class ToolRegistry:
                 args.county_code,
                 args.county_name,
             )
+            sort_title_name = args.sort_title_name
+            if args.sort_by == "title_quantity" and not (sort_title_name or "").strip():
+                keyword = (args.keyword or "").strip()
+                if keyword:
+                    parts = [part for part in re.split(r"\s+", keyword) if part]
+                    if parts:
+                        sort_title_name = parts[-1]
 
             rows, total = self._db_query_tool.search_shops(
                 keyword=args.keyword,
@@ -167,9 +174,12 @@ class ToolRegistry:
                 has_arcades=args.has_arcades,
                 page=args.page,
                 page_size=args.page_size,
+                sort_by=args.sort_by,
+                sort_order=args.sort_order,
+                sort_title_name=sort_title_name,
             )
             logger.info(
-                "db_query_tool.filters keyword=%s province_code=%s city_code=%s county_code=%s province_name=%s city_name=%s county_name=%s has_arcades=%s page=%s page_size=%s total=%s",
+                "db_query_tool.filters keyword=%s province_code=%s city_code=%s county_code=%s province_name=%s city_name=%s county_name=%s has_arcades=%s sort_by=%s sort_order=%s sort_title_name=%s page=%s page_size=%s total=%s",
                 _short(args.keyword),
                 province_code,
                 city_code,
@@ -178,11 +188,32 @@ class ToolRegistry:
                 city_name,
                 county_name,
                 args.has_arcades,
+                args.sort_by,
+                args.sort_order,
+                _short(sort_title_name),
                 args.page,
                 args.page_size,
                 total,
             )
-            return {"shops": rows, "total": total}
+            return {
+                "shops": rows,
+                "total": total,
+                "query": {
+                    "keyword": args.keyword,
+                    "province_code": province_code,
+                    "city_code": city_code,
+                    "county_code": county_code,
+                    "province_name": province_name,
+                    "city_name": city_name,
+                    "county_name": county_name,
+                    "has_arcades": args.has_arcades,
+                    "sort_by": args.sort_by,
+                    "sort_order": args.sort_order,
+                    "sort_title_name": sort_title_name,
+                    "page": args.page,
+                    "page_size": args.page_size,
+                },
+            }
 
         if tool_name == "geo_resolve_tool":
             args = validated if isinstance(validated, GeoResolveArgs) else GeoResolveArgs.model_validate(validated)
@@ -213,6 +244,9 @@ class ToolRegistry:
                     keyword=args.keyword,
                     total=int(args.total or 0),
                     shops=args.shops or [],
+                    sort_by=args.sort_by,
+                    sort_order=args.sort_order,
+                    sort_title_name=args.sort_title_name,
                 )
             return {"reply": reply}
 

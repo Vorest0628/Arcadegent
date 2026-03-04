@@ -3,6 +3,9 @@ export type RegionItem = {
   name: string;
 };
 
+export type ArcadeSortBy = "default" | "updated_at" | "source_id" | "arcade_count" | "title_quantity";
+export type SortOrder = "asc" | "desc";
+
 export type ArcadeSummary = {
   source: string;
   source_id: number;
