@@ -190,7 +190,8 @@ function ChatPanel({
   streamItems,
   streamReplyTarget,
   streamReply,
-  streamReplyActive
+  streamReplyActive,
+  awaitingAssistant
 }: {
   turns: ChatHistoryTurn[];
   loading: boolean;
@@ -206,21 +207,37 @@ function ChatPanel({
   streamReplyTarget: string;
   streamReply: string;
   streamReplyActive: boolean;
+  awaitingAssistant: boolean;
 }) {
   const endRef = useRef<HTMLDivElement | null>(null);
   const turnsForRender = useMemo(() => {
-    if (!streamReplyActive || !streamReplyTarget.trim()) {
-      return turns;
-    }
     if (!turns.length) {
       return turns;
     }
     const last = turns[turns.length - 1];
-    if (last.role === "assistant" && last.content === streamReplyTarget) {
+    if (last.role !== "assistant") {
+      return turns;
+    }
+    const hasStreamingContext =
+      awaitingAssistant || sending || streamConnected || streamReplyActive || streamReplyTarget.trim().length > 0;
+    if (!hasStreamingContext) {
+      return turns;
+    }
+    if (awaitingAssistant) {
+      return turns.slice(0, -1);
+    }
+    const streamText = streamReplyTarget.trim();
+    if (!streamText) {
+      return turns.slice(0, -1);
+    }
+    const lastText = last.content.trim();
+    const overlaps =
+      lastText === streamText || lastText.startsWith(streamText) || streamText.startsWith(lastText);
+    if (overlaps) {
       return turns.slice(0, -1);
     }
     return turns;
-  }, [streamReplyActive, streamReplyTarget, turns]);
+  }, [awaitingAssistant, sending, streamConnected, streamReplyActive, streamReplyTarget, turns]);
   const lastAssistantReply = useMemo(() => {
     for (let idx = turnsForRender.length - 1; idx >= 0; idx -= 1) {
       const turn = turnsForRender[idx];
@@ -233,15 +250,22 @@ function ChatPanel({
   const showStreamReply =
     streamReply.trim().length > 0 &&
     (streamReplyActive || !lastAssistantReply || !lastAssistantReply.startsWith(streamReply));
+  const showStreamStage = streamItems.length > 0 || sending || streamConnected || streamReplyActive || awaitingAssistant;
+  const showStreamingBubble = showStreamReply || awaitingAssistant;
+  const showEmptyState = turns.length === 0 && !showStreamingBubble && !showStreamStage;
+  const latestStreamItem = streamItems.length ? streamItems[streamItems.length - 1] : null;
+  const stageStatusText =
+    latestStreamItem?.text ?? (streamConnected ? "等待阶段事件..." : sending ? "连接中..." : "阶段已结束");
+  const stageStatusMeta = latestStreamItem ? formatTimeLabel(latestStreamItem.at) : "实时同步中...";
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [turnsForRender, loading, sending, streamItems, streamReply]);
+  }, [turnsForRender, loading, sending, streamItems, streamReply, awaitingAssistant, showStreamStage]);
 
   return (
     <div className="chat-view">
       <div className="chat-scroll">
-        {turns.length === 0 ? (
+        {showEmptyState ? (
           <div className="chat-empty">
             <p className="chat-empty-title">今天想查哪家机厅？</p>
             <p className="chat-empty-subtitle">你可以直接提问，也可以先点一个预设问题。</p>
@@ -273,15 +297,28 @@ function ChatPanel({
                 </div>
               </li>
             ))}
-            {showStreamReply ? (
+            {showStreamStage ? (
+              <li
+                key="streaming-stage-status"
+                className="chat-message assistant stream-event"
+                style={{ animationDelay: `${Math.min(turnsForRender.length, 8) * 45}ms` }}
+              >
+                <div className="chat-bubble chat-event-bubble">
+                  <p>执行阶段：{formatSubagentLabel(activeSubagent)}</p>
+                  <small>{stageStatusText}</small>
+                  <small>{stageStatusMeta}</small>
+                </div>
+              </li>
+            ) : null}
+            {showStreamingBubble ? (
               <li
                 key="streaming-assistant"
                 className="chat-message assistant streaming"
                 style={{ animationDelay: `${Math.min(turnsForRender.length, 8) * 45}ms` }}
               >
                 <div className="chat-bubble">
-                  <p>
-                    {streamReply}
+                  <p className={!streamReply.trim() ? "chat-stream-placeholder" : undefined}>
+                    {streamReply.trim() ? streamReply : "正在生成回复..."}
                     {streamReplyActive ? <span className="chat-stream-caret" aria-hidden="true" /> : null}
                   </p>
                   <small>{streamReplyActive ? "生成中..." : "已生成"}</small>
@@ -294,29 +331,6 @@ function ChatPanel({
         {loading ? <p className="chat-loading">加载会话中...</p> : null}
         <div ref={endRef} />
       </div>
-
-      {sending || streamItems.length ? (
-        <section className={`chat-stage-board ${streamConnected ? "is-live" : ""}`}>
-          <div className="chat-stage-head">
-            <span className={`chat-stage-dot ${streamConnected ? "is-live" : ""}`} />
-            <strong>执行阶段</strong>
-            <small>{sending ? (streamConnected ? "实时同步中" : "连接中...") : "本轮已结束"}</small>
-          </div>
-          <p className="chat-stage-current">{formatSubagentLabel(activeSubagent)}</p>
-          <ul className="chat-stage-list">
-            {streamItems.length === 0 ? (
-              <li className="chat-stage-empty">等待阶段事件...</li>
-            ) : (
-              streamItems.map((item) => (
-                <li key={`${item.id}-${item.event}`}>
-                  <span>{item.text}</span>
-                  <small>{formatTimeLabel(item.at)}</small>
-                </li>
-              ))
-            )}
-          </ul>
-        </section>
-      ) : null}
 
       {error ? <div className="chat-error">{error}</div> : null}
 
@@ -353,6 +367,7 @@ export function App() {
   const [streamItems, setStreamItems] = useState<StreamProgressItem[]>([]);
   const [streamReplyTarget, setStreamReplyTarget] = useState("");
   const [streamReplyDisplay, setStreamReplyDisplay] = useState("");
+  const [awaitingAssistant, setAwaitingAssistant] = useState(false);
 
   const streamRef = useRef<EventSource | null>(null);
 
@@ -395,19 +410,38 @@ export function App() {
     return () => window.clearTimeout(timer);
   }, [streamReplyDisplay, streamReplyTarget]);
 
+  useEffect(() => {
+    if (!awaitingAssistant) {
+      return;
+    }
+    const typingDone = streamReplyTarget.length > 0 && streamReplyDisplay === streamReplyTarget;
+    if (!sending && !streamConnected && typingDone) {
+      setAwaitingAssistant(false);
+    }
+  }, [awaitingAssistant, sending, streamConnected, streamReplyDisplay, streamReplyTarget, turns]);
+
+  useEffect(() => {
+    if (!awaitingAssistant || streamReplyTarget.trim()) {
+      return;
+    }
+    const last = turns[turns.length - 1];
+    if (last?.role === "assistant" && last.content.trim()) {
+      setStreamReplyTarget((previous) => (last.content.length > previous.length ? last.content : previous));
+    }
+  }, [awaitingAssistant, streamReplyTarget, turns]);
+
   const pushStreamEnvelope = useCallback((envelope: ChatStreamEnvelope) => {
-    setStreamItems((previous) => {
-      const collapseEvent = envelope.event === "assistant.token" || envelope.event === "tool.progress";
+    if (envelope.event === "assistant.token") {
+      return;
+    }
+    setStreamItems(() => {
       const next: StreamProgressItem = {
         id: envelope.id,
         event: envelope.event,
         text: toProgressText(envelope),
         at: envelope.at
       };
-      const filtered = previous.filter(
-        (item) => item.id !== envelope.id && !(collapseEvent && item.event === envelope.event)
-      );
-      return [...filtered.slice(-7), next];
+      return [next];
     });
   }, []);
 
@@ -460,7 +494,7 @@ export function App() {
         if (envelope.event === "assistant.token") {
           const fullText = envelope.data.content;
           if (typeof fullText === "string") {
-            setStreamReplyTarget(fullText);
+            setStreamReplyTarget((previous) => (fullText.length >= previous.length ? fullText : previous));
           } else {
             const delta = envelope.data.delta;
             if (typeof delta === "string" && delta) {
@@ -471,7 +505,7 @@ export function App() {
         if (envelope.event === "assistant.completed") {
           const reply = envelope.data.reply;
           if (typeof reply === "string" && reply) {
-            setStreamReplyTarget(reply);
+            setStreamReplyTarget((previous) => (reply.length >= previous.length ? reply : previous));
           }
         }
 
@@ -495,7 +529,11 @@ export function App() {
     [pushStreamEnvelope, resetStreamReply, stopStream]
   );
 
-  async function loadSessionList(preferredSessionId?: string) {
+  async function loadSessionList(
+    preferredSessionId?: string,
+    options?: { preserveStreamState?: boolean }
+  ) {
+    const preserveStreamState = options?.preserveStreamState ?? false;
     setSessionsLoading(true);
     try {
       const rows = await listChatSessions(60);
@@ -504,6 +542,11 @@ export function App() {
         setActiveSessionId(null);
         setTurns([]);
         setActiveSubagent(null);
+        if (!preserveStreamState) {
+          setStreamItems([]);
+          resetStreamReply();
+          setAwaitingAssistant(false);
+        }
         return;
       }
       const targetId =
@@ -513,7 +556,7 @@ export function App() {
             ? activeSessionId
             : rows[0].session_id;
       if (targetId && targetId !== activeSessionId) {
-        await loadSession(targetId);
+        await loadSession(targetId, { preserveStreamState });
       }
     } catch (err) {
       setChatError(err instanceof Error ? err.message : "加载会话列表失败");
@@ -522,7 +565,8 @@ export function App() {
     }
   }
 
-  async function loadSession(sessionId: string) {
+  async function loadSession(sessionId: string, options?: { preserveStreamState?: boolean }) {
+    const preserveStreamState = options?.preserveStreamState ?? false;
     setTurnsLoading(true);
     setChatError("");
     try {
@@ -530,9 +574,10 @@ export function App() {
       setActiveSessionId(sessionId);
       setTurns(toVisibleTurns(detail.turns));
       setActiveSubagent(detail.active_subagent || null);
-      if (!sending) {
+      if (!preserveStreamState) {
         setStreamItems([]);
         resetStreamReply();
+        setAwaitingAssistant(false);
       }
     } catch (err) {
       setChatError(err instanceof Error ? err.message : "加载会话失败");
@@ -572,6 +617,7 @@ export function App() {
     setActiveSubagent(null);
     setStreamItems([]);
     resetStreamReply();
+    setAwaitingAssistant(false);
   }
 
   async function submitChat(event: FormEvent) {
@@ -583,10 +629,14 @@ export function App() {
 
     const sessionId = activeSessionId || makeSessionId();
 
+    const optimisticCreatedAt = new Date().toISOString();
+
     setSending(true);
     setChatError("");
     setInputValue("");
     setActiveSessionId(sessionId);
+    setAwaitingAssistant(true);
+    setTurns((previous) => [...previous, { role: "user", content: message, created_at: optimisticCreatedAt }]);
     startStream(sessionId);
 
     try {
@@ -595,14 +645,35 @@ export function App() {
         message,
         page_size: 5
       });
-      await loadSession(response.session_id);
-      await loadSessionList(response.session_id);
+      setStreamReplyTarget((previous) => {
+        const nextReply = typeof response.reply === "string" ? response.reply : "";
+        if (nextReply.length > previous.length) {
+          return nextReply;
+        }
+        return previous;
+      });
+      await loadSession(response.session_id, { preserveStreamState: true });
+      await loadSessionList(response.session_id, { preserveStreamState: true });
     } catch (err) {
       setChatError(err instanceof Error ? err.message : "发送失败");
       setInputValue(message);
+      setTurns((previous) => {
+        const next = [...previous];
+        const last = next[next.length - 1];
+        if (
+          last &&
+          last.role === "user" &&
+          last.content === message &&
+          last.created_at === optimisticCreatedAt
+        ) {
+          next.pop();
+        }
+        return next;
+      });
       setStreamItems([]);
       setActiveSubagent(null);
       resetStreamReply();
+      setAwaitingAssistant(false);
       stopStream();
     } finally {
       setSending(false);
@@ -634,6 +705,7 @@ export function App() {
         setActiveSubagent(null);
         setStreamItems([]);
         resetStreamReply();
+        setAwaitingAssistant(false);
       }
       await loadSessionList(isActive ? undefined : activeSessionId || undefined);
     } catch (err) {
@@ -742,6 +814,7 @@ export function App() {
               streamConnected ||
               streamReplyDisplay.length < streamReplyTarget.length
             }
+            awaitingAssistant={awaitingAssistant}
           />
         ) : (
           <ArcadeBrowser />

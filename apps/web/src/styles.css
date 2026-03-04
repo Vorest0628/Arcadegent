@@ -314,6 +314,26 @@ body {
   background: linear-gradient(140deg, #f4fbf8, #ffffff);
 }
 
+.chat-message.stream-event .chat-bubble {
+  border-color: #c9e0d9;
+  background: #f4faf8;
+  box-shadow: 0 8px 16px rgba(19, 39, 34, 0.04);
+}
+
+.chat-event-bubble {
+  max-width: min(70ch, 76%);
+}
+
+.chat-event-bubble p {
+  color: #24594f;
+  font-size: 0.95rem;
+}
+
+.chat-event-bubble small + small {
+  margin-top: -4px;
+  font-size: 0.72rem;
+}
+
 .chat-bubble {
   max-width: min(76ch, 80%);
   border-radius: 14px;
@@ -334,6 +354,10 @@ body {
   margin: 0;
   line-height: 1.55;
   white-space: pre-wrap;
+}
+
+.chat-stream-placeholder {
+  color: var(--muted);
 }
 
 .chat-stream-caret {
@@ -357,15 +381,20 @@ body {
 }
 
 .chat-stage-board {
-  border-top: 1px dashed var(--line);
-  background: rgba(255, 255, 255, 0.72);
-  padding: 10px 12px 12px;
+  border: 1px solid #d9e9e2;
+  border-radius: 10px;
+  background: #f8fcfa;
+  padding: 8px 9px;
   display: grid;
-  gap: 8px;
+  gap: 7px;
 }
 
 .chat-stage-board.is-live {
-  background: linear-gradient(180deg, rgba(216, 236, 231, 0.58), rgba(255, 255, 255, 0.72));
+  background: linear-gradient(180deg, #e9f5f1, #f7fcfa);
+}
+
+.chat-stage-board.is-inline {
+  margin-top: 2px;
 }
 
 .chat-stage-head {
@@ -409,6 +438,12 @@ body {
   padding: 0;
   display: grid;
   gap: 6px;
+}
+
+.chat-stage-board.is-inline .chat-stage-list {
+  max-height: 148px;
+  overflow: auto;
+  padding-right: 2px;
 }
 
 .chat-stage-list li {
