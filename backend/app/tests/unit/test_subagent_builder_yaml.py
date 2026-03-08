@@ -20,18 +20,25 @@ def test_subagent_builder_loads_executable_fields_from_definitions() -> None:
 
     assert intent_profile.prompt_file == "intent_router.md"
     assert intent_profile.allowed_tools == ["select_next_subagent"]
+    assert intent_profile.skill_files == []
 
     assert search_profile.prompt_file == "search_agent.md"
-    assert search_profile.allowed_tools == ["db_query_tool", "summary_tool", "select_next_subagent"]
+    assert search_profile.allowed_tools == ["db_query_tool", "select_next_subagent"]
+    assert search_profile.skill_files == ["search_result_reading.md"]
 
     assert nav_profile.prompt_file == "navigation_agent.md"
     assert nav_profile.allowed_tools == [
         "db_query_tool",
         "geo_resolve_tool",
         "route_plan_tool",
-        "summary_tool",
         "select_next_subagent",
     ]
+    assert nav_profile.skill_files == ["search_result_reading.md", "navigation_result_reading.md"]
 
     assert summary_profile.prompt_file == "summary_agent.md"
-    assert summary_profile.allowed_tools == ["summary_tool"]
+    assert summary_profile.allowed_tools == []
+    assert summary_profile.skill_files == [
+        "response_composition.md",
+        "search_result_reading.md",
+        "navigation_result_reading.md",
+    ]

@@ -119,7 +119,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     ),
     "geo_resolve_tool": "Resolve map provider by province code.",
     "route_plan_tool": "Plan a route from origin to destination.",
-    "summary_tool": "Generate concise text summary for search or navigation context.",
+    "summary_tool": "Format a deterministic text summary from structured search or navigation context.",
     "select_next_subagent": "Emit a compatibility hint for next subagent candidate; runtime policy decides final route.",
 }
 

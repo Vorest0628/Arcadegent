@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -20,6 +20,7 @@ class SubAgentProfile:
     name: SubAgentName
     prompt_file: str
     allowed_tools: list[str]
+    skill_files: list[str] = field(default_factory=list)
 
 
 class SubAgentBuilder:
@@ -36,11 +37,13 @@ class SubAgentBuilder:
                 name="intent_router",
                 prompt_file="intent_router.md",
                 allowed_tools=["select_next_subagent"],
+                skill_files=[],
             ),
             "search_agent": SubAgentProfile(
                 name="search_agent",
                 prompt_file="search_agent.md",
-                allowed_tools=["db_query_tool", "summary_tool", "select_next_subagent"],
+                allowed_tools=["db_query_tool", "select_next_subagent"],
+                skill_files=["search_result_reading.md"],
             ),
             "navigation_agent": SubAgentProfile(
                 name="navigation_agent",
@@ -49,14 +52,19 @@ class SubAgentBuilder:
                     "db_query_tool",
                     "geo_resolve_tool",
                     "route_plan_tool",
-                    "summary_tool",
                     "select_next_subagent",
                 ],
+                skill_files=["search_result_reading.md", "navigation_result_reading.md"],
             ),
             "summary_agent": SubAgentProfile(
                 name="summary_agent",
                 prompt_file="summary_agent.md",
-                allowed_tools=["summary_tool"],
+                allowed_tools=[],
+                skill_files=[
+                    "response_composition.md",
+                    "search_result_reading.md",
+                    "navigation_result_reading.md",
+                ],
             ),
         }
         if enable_yaml_overlay and definitions_dir is not None:
@@ -98,10 +106,12 @@ class SubAgentBuilder:
                 allowed_tools = overlay_tools
             else:
                 allowed_tools = self._merge_unique(profile.allowed_tools, overlay_tools)
+            skill_files = self._merge_unique(profile.skill_files, self._read_skill_files(payload))
             self._profiles[subagent_name] = SubAgentProfile(
                 name=profile.name,
                 prompt_file=prompt_file,
                 allowed_tools=allowed_tools,
+                skill_files=skill_files,
             )
 
     def _read_yaml(self, path: Path) -> dict[str, Any] | None:
@@ -170,6 +180,18 @@ class SubAgentBuilder:
                 if value:
                     tools.append(value)
         return tools
+
+    def _read_skill_files(self, payload: dict[str, Any]) -> list[str]:
+        raw = payload.get("skill_files")
+        if not isinstance(raw, list):
+            return []
+        skill_files: list[str] = []
+        for item in raw:
+            if isinstance(item, str):
+                value = item.strip()
+                if value:
+                    skill_files.append(value)
+        return skill_files
 
     def _merge_unique(self, base: list[str], overlay: list[str]) -> list[str]:
         merged: list[str] = []

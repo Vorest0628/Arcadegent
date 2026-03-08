@@ -23,7 +23,6 @@ from app.agent.tools.builtin.select_next_subagent_tool import SelectNextSubagent
 from app.agent.tools.builtin.summary_tool import SummaryTool
 from app.core.config import Settings
 from app.infra.db.local_store import LocalArcadeStore
-from app.infra.llm.openai_compatible_client import OpenAICompatibleClient, OpenAICompatibleConfig
 
 
 @dataclass
@@ -43,16 +42,6 @@ def build_container(settings: Settings) -> AppContainer:
     store = LocalArcadeStore.from_jsonl(settings.data_jsonl_path)
     replay_buffer = ReplayBuffer(max_events_per_session=settings.replay_buffer_size)
     db_query_tool = DBQueryTool(store)
-    llm_client = OpenAICompatibleClient(
-        OpenAICompatibleConfig(
-            api_key=settings.llm_api_key,
-            base_url=settings.llm_base_url,
-            model=settings.llm_model,
-            timeout_seconds=settings.llm_timeout_seconds,
-            temperature=settings.llm_temperature,
-            max_tokens=settings.llm_max_tokens,
-        )
-    )
     provider_adapter = ProviderAdapter(resolve_llm_config(settings))
     route_tool = RoutePlanTool(
         amap_config=AMapConfig(
@@ -64,6 +53,7 @@ def build_container(settings: Settings) -> AppContainer:
     project_root = Path(__file__).resolve().parents[1]
     context_builder = ContextBuilder(
         prompt_root=project_root / "agent" / "context" / "prompts",
+        skill_root=project_root / "agent" / "context" / "skills",
         history_turn_limit=settings.agent_context_window,
     )
     subagent_builder = SubAgentBuilder(
@@ -75,7 +65,7 @@ def build_container(settings: Settings) -> AppContainer:
         db_query_tool=db_query_tool,
         geo_resolve_tool=GeoResolveTool(),
         route_plan_tool=route_tool,
-        summary_tool=SummaryTool(llm_client=llm_client),
+        summary_tool=SummaryTool(),
         select_next_subagent_tool=SelectNextSubagentTool(),
         permission_checker=permission_checker,
         strict_schema=True,

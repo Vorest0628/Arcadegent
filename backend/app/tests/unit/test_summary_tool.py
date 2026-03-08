@@ -1,22 +1,26 @@
-"""Unit tests for search summary robustness behavior."""
+"""Unit tests for deterministic summary tool behavior."""
 
 from __future__ import annotations
 
 from app.agent.tools.builtin.summary_tool import SummaryTool
+from app.protocol.messages import RouteSummaryDto
 
 
-class _StubLLM:
-    def __init__(self, reply: str) -> None:
-        self._reply = reply
+def test_summary_tool_returns_deterministic_zero_result_text() -> None:
+    tool = SummaryTool()
+    text = tool.summarize_search(
+        keyword="unknown",
+        total=0,
+        shops=[],
+    )
+    assert text == (
+        "\u672a\u627e\u5230\u5339\u914d\u201cunknown\u201d\u7684\u673a\u5385\uff0c"
+        "\u8bf7\u5c1d\u8bd5\u5176\u4ed6\u5173\u952e\u8bcd\u6216\u533a\u57df\u3002"
+    )
 
-    def chat_completion(self, *, system_prompt: str, user_prompt: str) -> str | None:
-        _ = system_prompt
-        _ = user_prompt
-        return self._reply
 
-
-def test_summary_tool_ignores_unreliable_llm_reply_when_results_exist() -> None:
-    tool = SummaryTool(llm_client=_StubLLM("\u62b1\u6b49\uff0c\u6211\u65e0\u6cd5\u76f4\u63a5\u67e5\u8be2\u8be5\u5730\u533a\u6570\u636e\u3002"))  # type: ignore[arg-type]
+def test_summary_tool_returns_preview_for_search_results() -> None:
+    tool = SummaryTool()
     text = tool.summarize_search(
         keyword="maimai",
         total=3,
@@ -26,30 +30,12 @@ def test_summary_tool_ignores_unreliable_llm_reply_when_results_exist() -> None:
         ],
     )
     assert "\u5171\u627e\u5230 3 \u5bb6\u673a\u5385\u3002" in text
-
-
-def test_summary_tool_ignores_no_data_reply_when_results_exist() -> None:
-    tool = SummaryTool(llm_client=_StubLLM("\u5f53\u524d\u6682\u65e0\u76f8\u5173\u5e97\u94fa\u6570\u636e\uff0c\u8bf7\u5c1d\u8bd5\u5176\u4ed6\u6761\u4ef6\u3002"))  # type: ignore[arg-type]
-    text = tool.summarize_search(
-        keyword="\u9ec4\u6d66\u533a",
-        total=5,
-        shops=[{"name": "X", "city_name": "Shanghai"}],
-    )
-    assert "\u5171\u627e\u5230 5 \u5bb6\u673a\u5385\u3002" in text
-
-
-def test_summary_tool_keeps_llm_reply_when_no_results() -> None:
-    tool = SummaryTool(llm_client=_StubLLM("\u62b1\u6b49\uff0c\u672a\u67e5\u5230\u7b26\u5408\u6761\u4ef6\u7684\u673a\u5385\u3002"))  # type: ignore[arg-type]
-    text = tool.summarize_search(
-        keyword="unknown",
-        total=0,
-        shops=[],
-    )
-    assert text == "\u62b1\u6b49\uff0c\u672a\u67e5\u5230\u7b26\u5408\u6761\u4ef6\u7684\u673a\u5385\u3002"
+    assert "A(Shanghai)" in text
+    assert "B(Shanghai)" in text
 
 
 def test_summary_tool_uses_deterministic_text_for_title_quantity_sorting() -> None:
-    tool = SummaryTool(llm_client=_StubLLM("ignored"))  # type: ignore[arg-type]
+    tool = SummaryTool()
     text = tool.summarize_search(
         keyword="maimai",
         total=12,
@@ -75,7 +61,7 @@ def test_summary_tool_uses_deterministic_text_for_title_quantity_sorting() -> No
 
 
 def test_summary_tool_title_quantity_uses_alias_matching() -> None:
-    tool = SummaryTool(llm_client=_StubLLM("ignored"))  # type: ignore[arg-type]
+    tool = SummaryTool()
     text = tool.summarize_search(
         keyword="sdvx",
         total=2,
@@ -96,3 +82,21 @@ def test_summary_tool_title_quantity_uses_alias_matching() -> None:
         sort_title_name="sdvx",
     )
     assert "5\u53f0" in text
+
+
+def test_summary_tool_returns_deterministic_navigation_text() -> None:
+    tool = SummaryTool()
+    text = tool.summarize_navigation(
+        "Foo Arcade",
+        RouteSummaryDto(
+            provider="amap",
+            mode="walking",
+            distance_m=820,
+            duration_s=630,
+            hint="\u4ece 2 \u53f7\u53e3\u51fa\u7ad9\u540e\u76f4\u884c\u3002",
+        ),
+    )
+    assert text == (
+        "\u524d\u5f80Foo Arcade\uff1a\u6b65\u884c820\u7c73\uff0c\u7ea610\u5206\u949f\u3002 "
+        "\u4ece 2 \u53f7\u53e3\u51fa\u7ad9\u540e\u76f4\u884c\u3002"
+    )

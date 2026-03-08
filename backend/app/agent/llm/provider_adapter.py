@@ -499,8 +499,8 @@ class ProviderAdapter:
         if not tools:
             return "none"
         active_subagent = str((runtime_hints or {}).get("active_subagent") or "").strip()
-        # Intent and summary stages are tool-contract stages; force tool call for stability.
-        if active_subagent in {"intent_router", "summary_agent"}:
+        # Intent routing remains tool-contract first for stability.
+        if active_subagent == "intent_router":
             return "required"
         choice = self._config.tool_choice.strip().lower()
         if choice not in {"auto", "required", "none"}:

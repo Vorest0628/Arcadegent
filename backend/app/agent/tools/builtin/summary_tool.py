@@ -1,10 +1,9 @@
-"""Tool layer: natural-language summarizer for search/navigation responses."""
+"""Deterministic formatter for search/navigation summaries."""
 
 from __future__ import annotations
 
 import re
 
-from app.infra.llm.openai_compatible_client import OpenAICompatibleClient
 from app.infra.observability.logger import get_logger
 from app.protocol.messages import RouteSummaryDto
 
@@ -12,62 +11,10 @@ logger = get_logger(__name__)
 
 
 class SummaryTool:
-    """Template-based response summarizer used by orchestration runtime."""
+    """Pure formatter kept for compatibility with legacy summary tool calls."""
 
-    def __init__(self, llm_client: OpenAICompatibleClient | None = None) -> None:
-        self._llm_client = llm_client
-
-    def _call_llm(self, *, system_prompt: str, user_prompt: str) -> str | None:
-        if not self._llm_client:
-            return None
-        return self._llm_client.chat_completion(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-        )
-
-    def _is_unreliable_search_reply(
-        self,
-        reply: str,
-        *,
-        total: int,
-        sort_by: str | None = None,
-        sort_title_name: str | None = None,
-    ) -> bool:
-        text = " ".join(reply.split()).lower()
-        if total <= 0:
-            return False
-
-        red_flags = (
-            "\u65e0\u6cd5",
-            "\u4e0d\u80fd",
-            "\u62b1\u6b49",
-            "\u6682\u65e0",
-            "\u65e0\u76f8\u5173",
-            "\u6ca1\u6709\u76f8\u5173",
-            "\u672a\u627e\u5230",
-            "\u672a\u67e5\u5230",
-            "no access",
-            "can't access",
-            "not found",
-            "no result",
-        )
-        if any(flag in text for flag in red_flags):
-            return True
-
-        if bool(
-            re.search(
-                r"(\u6682\u65e0|\u672a\u627e\u5230|\u672a\u67e5\u5230).*(\u6570\u636e|\u5e97\u94fa|\u673a\u5385)",
-                text,
-            )
-        ):
-            return True
-
-        if (sort_by or "").strip().lower() == "title_quantity" and sort_title_name:
-            # total here means number of shops, not number of machines.
-            if re.search(rf"\b{total}\s*(\u53f0|machines?)\b", text):
-                return True
-
-        return False
+    def __init__(self, llm_client: object | None = None) -> None:
+        _ = llm_client
 
     @staticmethod
     def _normalize_title_name(value: str | None) -> str:
@@ -129,6 +76,43 @@ class SummaryTool:
             return prefix
         return f"{prefix} \u5f53\u524d\u9875\u524d{len(preview_parts)}\uff1a{'\uff1b'.join(preview_parts)}\u3002"
 
+    def _default_search_summary(
+        self,
+        *,
+        keyword: str | None,
+        total: int,
+        shops: list[dict],
+        sort_by: str | None,
+        sort_order: str | None,
+    ) -> str:
+        if total <= 0:
+            if keyword:
+                return (
+                    f"\u672a\u627e\u5230\u5339\u914d\u201c{keyword}\u201d\u7684\u673a\u5385\uff0c"
+                    "\u8bf7\u5c1d\u8bd5\u5176\u4ed6\u5173\u952e\u8bcd\u6216\u533a\u57df\u3002"
+                )
+            return "\u672a\u627e\u5230\u7b26\u5408\u6761\u4ef6\u7684\u673a\u5385\u3002"
+
+        summary = f"\u5171\u627e\u5230 {total} \u5bb6\u673a\u5385\u3002"
+        normalized_sort = (sort_by or "default").strip().lower()
+        normalized_order = (sort_order or "desc").strip().lower()
+        if normalized_sort == "updated_at":
+            order = "\u6700\u65b0\u5728\u524d" if normalized_order != "asc" else "\u6700\u65e9\u5728\u524d"
+            summary = f"{summary} \u7ed3\u679c\u6309\u66f4\u65b0\u65f6\u95f4{order}\u3002"
+        elif normalized_sort == "arcade_count":
+            order = "\u7531\u9ad8\u5230\u4f4e" if normalized_order != "asc" else "\u7531\u4f4e\u5230\u9ad8"
+            summary = f"{summary} \u7ed3\u679c\u6309\u6536\u5f55\u673a\u79cd\u6570{order}\u6392\u5e8f\u3002"
+
+        preview_parts: list[str] = []
+        for idx, row in enumerate(shops[:3], start=1):
+            name = str(row.get("name") or "unknown arcade")
+            city = str(row.get("city_name") or row.get("county_name") or "-")
+            preview_parts.append(f"{idx}. {name}({city})")
+
+        if preview_parts:
+            summary = f"{summary} \u53ef\u5148\u770b\uff1a{'\uff1b'.join(preview_parts)}\u3002"
+        return summary
+
     def summarize_search(
         self,
         keyword: str | None,
@@ -162,75 +146,23 @@ class SummaryTool:
                 sort_title_name=sort_title_name,
             )
 
-        llm_prompt = {
-            "keyword": keyword,
-            "total": total,
-            "sort_by": sort_by,
-            "sort_order": sort_order,
-            "sort_title_name": sort_title_name,
-            "top_shops": [
-                {
-                    "name": row.get("name"),
-                    "city_name": row.get("city_name"),
-                    "county_name": row.get("county_name"),
-                    "arcade_count": row.get("arcade_count"),
-                }
-                for row in shops[:5]
-            ],
-        }
-
-        llm_result = self._call_llm(
-            system_prompt=(
-                "You are Arcadegent search assistant. "
-                "Return a concise Chinese summary in under 120 Chinese characters. "
-                "If total > 0, never claim no data or not found. "
-                "The total value means number of shops, not number of machines."
-            ),
-            user_prompt=str(llm_prompt),
-        )
-        if llm_result and not self._is_unreliable_search_reply(
-            llm_result,
+        return self._default_search_summary(
+            keyword=keyword,
             total=total,
+            shops=shops,
             sort_by=sort_by,
-            sort_title_name=sort_title_name,
-        ):
-            return llm_result
-
-        if total <= 0:
-            if keyword:
-                return (
-                    f"\u672a\u627e\u5230\u5339\u914d\u2018{keyword}\u2019\u7684\u673a\u5385\uff0c"
-                    "\u8bf7\u5c1d\u8bd5\u5176\u4ed6\u5173\u952e\u8bcd\u6216\u533a\u57df\u3002"
-                )
-            return "\u672a\u627e\u5230\u7b26\u5408\u6761\u4ef6\u7684\u673a\u5385\u3002"
-
-        preview = [
-            f"{idx}. {row.get('name') or 'unknown arcade'} ({row.get('city_name') or 'unknown city'})"
-            for idx, row in enumerate(shops[:3], start=1)
-        ]
-        prefix = f"\u5171\u627e\u5230 {total} \u5bb6\u673a\u5385\u3002"
-        return prefix + (f" \u53ef\u4f18\u5148\u53c2\u8003\uff1a{'; '.join(preview)}" if preview else "")
+            sort_order=sort_order,
+        )
 
     def summarize_navigation(self, shop_name: str, route: RouteSummaryDto) -> str:
-        llm_result = self._call_llm(
-            system_prompt=(
-                "You are Arcadegent navigation assistant. "
-                "Return a concise Chinese route summary under 100 Chinese characters."
-            ),
-            user_prompt=str(
-                {
-                    "shop_name": shop_name,
-                    "provider": route.provider,
-                    "mode": route.mode,
-                    "distance_m": route.distance_m,
-                    "duration_s": route.duration_s,
-                    "hint": route.hint,
-                }
-            ),
-        )
-        if llm_result:
-            return llm_result
-
         dist = route.distance_m if route.distance_m is not None else 0
-        mins = int((route.duration_s or 0) / 60)
-        return f"Route to {shop_name} ({route.mode}): {dist} meters, about {mins} minutes."
+        mins = max(1, int((route.duration_s or 0) / 60)) if route.duration_s else 0
+        mode = "\u6b65\u884c" if route.mode == "walking" else "\u9a7e\u8f66"
+        summary = f"\u524d\u5f80{shop_name}\uff1a{mode}{dist}\u7c73"
+        if mins > 0:
+            summary = f"{summary}\uff0c\u7ea6{mins}\u5206\u949f"
+        summary = f"{summary}\u3002"
+        hint = str(route.hint or "").strip()
+        if hint:
+            summary = f"{summary} {hint}"
+        return summary
