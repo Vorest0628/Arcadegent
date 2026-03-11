@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from app.agent.events.replay_buffer import ReplayBuffer
 from app.agent.llm.provider_adapter import ModelToolCall
 from app.agent.orchestration.transition_policy import TransitionPolicy
-from app.agent.runtime.session_state import AgentSessionState, AgentTurn
+from app.agent.runtime.session_state import AgentSessionState, AgentTurn, SessionStateStore
 from app.agent.tools.registry import ToolExecutionResult, ToolRegistry
 from app.infra.observability.logger import get_logger
 
@@ -87,10 +87,12 @@ class ToolActionObserver:
         tool_registry: ToolRegistry,
         transition_policy: TransitionPolicy,
         replay_buffer: ReplayBuffer,
+        session_store: SessionStateStore,
     ) -> None:
         self._tool_registry = tool_registry
         self._transition_policy = transition_policy
         self._replay_buffer = replay_buffer
+        self._session_store = session_store
 
     def execute_tool_calls(
         self,
@@ -278,6 +280,7 @@ class ToolActionObserver:
                 result.status,
                 state.active_subagent,
             )
+        self._session_store.save(state)
 
     def _prepare_tool_arguments(
         self,

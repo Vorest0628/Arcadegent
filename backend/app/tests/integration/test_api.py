@@ -35,23 +35,30 @@ def _seed_data(path: Path) -> None:
             handle.write("\n")
 
 
-def _build_client(tmp_path: Path) -> TestClient:
+def _build_client(tmp_path: Path, *, session_store_path: Path | None = None) -> TestClient:
     data_path = tmp_path / "shops.jsonl"
     _seed_data(data_path)
     os.environ["ARCADE_DATA_JSONL"] = str(data_path)
+    os.environ["CHAT_SESSION_STORE_PATH"] = str(session_store_path or (tmp_path / "chat_sessions.json"))
 
     from app.main import create_app
 
     return TestClient(create_app())
 
 
-def _build_client_with_rows(tmp_path: Path, rows: list[dict[str, object]]) -> TestClient:
+def _build_client_with_rows(
+    tmp_path: Path,
+    rows: list[dict[str, object]],
+    *,
+    session_store_path: Path | None = None,
+) -> TestClient:
     data_path = tmp_path / "shops_custom.jsonl"
     with data_path.open("w", encoding="utf-8") as handle:
         for row in rows:
             handle.write(json.dumps(row, ensure_ascii=False))
             handle.write("\n")
     os.environ["ARCADE_DATA_JSONL"] = str(data_path)
+    os.environ["CHAT_SESSION_STORE_PATH"] = str(session_store_path or (tmp_path / "chat_sessions.json"))
 
     from app.main import create_app
 
@@ -118,6 +125,31 @@ def test_chat_reuses_session_context(tmp_path: Path) -> None:
 
     deleted_detail = client.get(f"/api/v1/chat/sessions/{session_id}")
     assert deleted_detail.status_code == 404
+
+
+def test_chat_sessions_survive_app_restart(tmp_path: Path) -> None:
+    session_store_path = tmp_path / "persisted_chat_sessions.json"
+    client = _build_client(tmp_path, session_store_path=session_store_path)
+
+    first_resp = client.post("/api/chat", json={"message": "find Gamma", "page_size": 3})
+    assert first_resp.status_code == 200
+    session_id = first_resp.json()["session_id"]
+
+    restarted_client = _build_client(tmp_path, session_store_path=session_store_path)
+
+    sessions_resp = restarted_client.get("/api/v1/chat/sessions")
+    assert sessions_resp.status_code == 200
+    sessions = sessions_resp.json()
+    assert sessions
+    assert any(row["session_id"] == session_id for row in sessions)
+
+    detail_resp = restarted_client.get(f"/api/v1/chat/sessions/{session_id}")
+    assert detail_resp.status_code == 200
+    detail = detail_resp.json()
+    assert detail["session_id"] == session_id
+    assert detail["turn_count"] >= 2
+    assert detail["turns"][0]["role"] == "user"
+    assert detail["turns"][-1]["role"] == "assistant"
 
 
 def test_arcades_api_supports_title_quantity_sorting(tmp_path: Path) -> None:

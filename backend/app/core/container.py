@@ -70,7 +70,7 @@ def build_container(settings: Settings) -> AppContainer:
         permission_checker=permission_checker,
         strict_schema=True,
     )
-    session_store = SessionStateStore()
+    session_store = SessionStateStore(storage_path=settings.chat_session_store_path)
     react_runtime = ReactRuntime(
         context_builder=context_builder,
         subagent_builder=subagent_builder,

@@ -132,7 +132,7 @@ def _summary_row(raw: dict) -> ArcadeShopSummaryDto:
 
 
 class ReactRuntime:
-    """Function-calling ReAct orchestrator with in-memory session persistence."""
+    """Function-calling ReAct orchestrator with session persistence."""
 
     def __init__(
         self,
@@ -157,6 +157,7 @@ class ReactRuntime:
             tool_registry=tool_registry,
             transition_policy=transition_policy,
             replay_buffer=replay_buffer,
+            session_store=session_store,
         )
 
     def run_chat(self, request: ChatRequest) -> ChatResponse:
@@ -320,6 +321,7 @@ class ReactRuntime:
             ),
         )
         state.working_memory["reply"] = final_text
+        self._session_store.save(state)
         self._replay_buffer.append(session_id, "assistant.completed", {"reply": final_text})
         logger.info(
             "chat.done session_id=%s intent=%s shops=%s reply=%s",
@@ -394,6 +396,7 @@ class ReactRuntime:
     def _append_turn(self, state: AgentSessionState, turn: AgentTurn) -> None:
         state.turns.append(turn)
         state.updated_at = _utc_now_iso()
+        self._session_store.save(state)
 
     def _emit_assistant_tokens(
         self,

@@ -20,6 +20,14 @@ def _resolve_path(path_like: str) -> Path:
     return candidate
 
 
+def _resolve_project_path(path_like: str) -> Path:
+    candidate = Path(path_like)
+    if candidate.is_absolute():
+        return candidate
+    project_root = Path(__file__).resolve().parents[3]
+    return project_root / candidate
+
+
 def _env_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name)
     if raw is None:
@@ -61,6 +69,7 @@ class Settings:
     port: int = 8000
     cors_allow_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
     data_jsonl_path: Path = Path("data/raw/bemanicn/shops_detail.jsonl")
+    chat_session_store_path: Path = Path("data/runtime/chat_sessions.json")
     replay_buffer_size: int = 200
     sse_keepalive_seconds: float = 1.0
     sse_max_wait_seconds: int = 20
@@ -95,6 +104,9 @@ class Settings:
             port=int(os.getenv("PORT", str(cls.port))),
             cors_allow_origins=os.getenv("CORS_ALLOW_ORIGINS", cls.cors_allow_origins),
             data_jsonl_path=_resolve_path(os.getenv("ARCADE_DATA_JSONL", str(cls.data_jsonl_path))),
+            chat_session_store_path=_resolve_project_path(
+                os.getenv("CHAT_SESSION_STORE_PATH", str(cls.chat_session_store_path))
+            ),
             replay_buffer_size=int(os.getenv("REPLAY_BUFFER_SIZE", str(cls.replay_buffer_size))),
             sse_keepalive_seconds=float(
                 os.getenv("SSE_KEEPALIVE_SECONDS", str(cls.sse_keepalive_seconds))
