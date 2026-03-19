@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.http.arcades import router as arcades_router
 from app.api.http.chat import router as chat_router
 from app.api.http.health import router as health_router
+from app.api.http.location import router as location_router
 from app.api.http.regions import router as regions_router
 from app.api.stream.sse import router as sse_router
 from app.core.config import Settings
@@ -74,6 +75,7 @@ def create_app() -> FastAPI:
 
     app.include_router(health_router)
     app.include_router(arcades_router)
+    app.include_router(location_router)
     app.include_router(regions_router)
     app.include_router(chat_router)
     app.include_router(sse_router)

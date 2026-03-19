@@ -61,6 +61,8 @@ class ContextBuilder:
         base_prompt = self._load_prompt("system_base.md").strip()
         subagent_prompt = self._load_prompt(subagent.prompt_file).strip()
         skill_block = self._build_skill_block(subagent.skill_files)
+        client_location = self._client_location_payload(session_state=session_state, request=request)
+        client_location_block = self._build_client_location_block(client_location)
         context_payload = self._build_context_payload(
             session_state=session_state,
             request=request,
@@ -72,6 +74,7 @@ class ContextBuilder:
             "active_subagent": session_state.active_subagent,
             "intent": session_state.intent,
             "request": request.model_dump(mode="json"),
+            "client_location": self._compact_value(client_location),
             "memory_summary": {
                 "has_shops": bool(session_state.working_memory.get("shops")),
                 "has_route": bool(session_state.working_memory.get("route")),
@@ -94,6 +97,7 @@ class ContextBuilder:
         instruction_parts.extend(
             (
                 subagent_prompt,
+                client_location_block,
                 "Runtime state (JSON):",
                 json.dumps(runtime_hint, ensure_ascii=False),
             )
@@ -218,6 +222,55 @@ class ContextBuilder:
         """
         messages = [self._to_model_message(turn) for turn in self._tail_turns(session_state.turns)]
         return BuiltContext(instructions=instructions, messages=messages)
+
+    def _client_location_payload(
+        self,
+        *,
+        session_state: AgentSessionState,
+        request: ChatRequest,
+    ) -> dict[str, Any] | None:
+        if request.location is not None:
+            payload = request.location.model_dump(mode="json", exclude_none=True)
+            compact = self._compact_value(payload)
+            return compact if isinstance(compact, dict) and compact else None
+        memory_location = session_state.working_memory.get("client_location")
+        if isinstance(memory_location, dict):
+            compact = self._compact_value(memory_location)
+            return compact if isinstance(compact, dict) and compact else None
+        return None
+
+    def _build_client_location_block(self, payload: dict[str, Any] | None) -> str:
+        if not payload:
+            return ""
+
+        lines = [
+            "Client location context:",
+            "Use this as the user's likely real-world location inferred from browser geolocation unless the user explicitly says otherwise.",
+        ]
+        lng = payload.get("lng")
+        lat = payload.get("lat")
+        if isinstance(lng, (int, float)) and isinstance(lat, (int, float)):
+            lines.append(f"- Coordinates (WGS84): lng={lng:.6f}, lat={lat:.6f}")
+        accuracy_m = payload.get("accuracy_m")
+        if isinstance(accuracy_m, (int, float)):
+            lines.append(f"- Accuracy radius: about {accuracy_m:.0f} meters")
+        region_text = self._string_or_none(payload.get("region_text"))
+        if region_text is None:
+            region_text = self._join_location_parts(
+                payload.get("province"),
+                payload.get("city"),
+                payload.get("district"),
+                payload.get("township"),
+            )
+        if region_text:
+            lines.append(f"- Region: {region_text}")
+        formatted_address = self._string_or_none(payload.get("formatted_address"))
+        if formatted_address:
+            lines.append(f"- Formatted address: {formatted_address}")
+        lines.append(
+            "- This may reveal nearby intent, district-level preferences, or the implied route origin."
+        )
+        return "\n".join(lines)
 
     def _tail_turns(self, turns: list[AgentTurn]) -> list[AgentTurn]:
         if len(turns) <= self._history_turn_limit:
@@ -658,6 +711,19 @@ class ContextBuilder:
                 continue
             return value
         return None
+
+    def _join_location_parts(self, *values: Any) -> str | None:
+        parts: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            text = self._string_or_none(value)
+            if text is None or text in seen:
+                continue
+            seen.add(text)
+            parts.append(text)
+        if not parts:
+            return None
+        return " / ".join(parts)
 
     def _compact_value(self, value: Any) -> Any:
         if isinstance(value, dict):

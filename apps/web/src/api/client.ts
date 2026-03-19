@@ -6,6 +6,8 @@ import type {
   ChatResponse,
   ChatSessionDetail,
   ChatSessionSummary,
+  ReverseGeocodeRequest,
+  ReverseGeocodeResponse,
   PagedArcades,
   RegionItem,
   SortOrder
@@ -109,4 +111,10 @@ export async function getChatSession(sessionId: string): Promise<ChatSessionDeta
 
 export async function deleteChatSession(sessionId: string): Promise<void> {
   return deleteJson(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}`);
+}
+
+export async function reverseGeocodeLocation(
+  payload: ReverseGeocodeRequest
+): Promise<ReverseGeocodeResponse> {
+  return postJson<ReverseGeocodeResponse>("/api/v1/location/reverse-geocode", payload);
 }

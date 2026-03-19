@@ -11,6 +11,7 @@ import { ArcadeBrowser } from "./components/ArcadeBrowser";
 import { ChatPanel } from "./components/ChatPanel";
 import { AppTopbar } from "./components/AppTopbar";
 import { useStreamReply } from "./hooks/useStreamReply";
+import { resolveClientLocationForSessionStart, warmupClientLocationCache } from "./lib/clientLocation";
 import { STREAM_EVENT_NAMES, toProgressText, toVisibleTurns, type StreamProgressItem } from "./lib/chatStream";
 import type {
   ChatHistoryTurn,
@@ -386,6 +387,7 @@ export function App() {
 
   useEffect(() => {
     void loadSessionList();
+    void warmupClientLocationCache();
   }, []);
 
   useEffect(() => {
@@ -427,6 +429,7 @@ export function App() {
       return;
     }
 
+    const isNewSession = !activeSessionId;
     const previousSessionId = activeSessionId;
     const previousSessionStatus = activeSessionStatus;
     const sessionId = activeSessionId || makeSessionId();
@@ -434,16 +437,20 @@ export function App() {
 
     setSending(true);
     setChatError("");
-    setInputValue("");
-    setActiveSessionId(sessionId);
-    setActiveSessionStatus("running");
-    setAwaitingAssistant(true);
-    setTurns((previous) => [...previous, { role: "user", content: message, created_at: optimisticCreatedAt }]);
 
     try {
+      const location = isNewSession ? await resolveClientLocationForSessionStart() : undefined;
+
+      setInputValue("");
+      setActiveSessionId(sessionId);
+      setActiveSessionStatus("running");
+      setAwaitingAssistant(true);
+      setTurns((previous) => [...previous, { role: "user", content: message, created_at: optimisticCreatedAt }]);
+
       const dispatched = await dispatchChatSession({
         session_id: sessionId,
         message,
+        location: location ?? undefined,
         page_size: 5
       });
       setActiveSessionId(dispatched.session_id);

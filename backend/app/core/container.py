@@ -24,6 +24,7 @@ from app.agent.tools.builtin.select_next_subagent_tool import SelectNextSubagent
 from app.agent.tools.builtin.summary_tool import SummaryTool
 from app.core.config import Settings
 from app.infra.db.local_store import LocalArcadeStore
+from app.services.amap_reverse_geocoder import AMapReverseGeocoder, AMapReverseGeocoderConfig
 
 
 @dataclass
@@ -34,6 +35,7 @@ class AppContainer:
     store: LocalArcadeStore
     replay_buffer: ReplayBuffer
     session_store: SessionStateStore
+    reverse_geocoder: AMapReverseGeocoder
     tool_registry: ToolRegistry
     react_runtime: ReactRuntime
     orchestrator: Orchestrator
@@ -47,6 +49,13 @@ def build_container(settings: Settings) -> AppContainer:
     provider_adapter = ProviderAdapter(resolve_llm_config(settings))
     route_tool = RoutePlanTool(
         amap_config=AMapConfig(
+            api_key=settings.amap_api_key,
+            base_url=settings.amap_base_url,
+            timeout_seconds=settings.amap_timeout_seconds,
+        )
+    )
+    reverse_geocoder = AMapReverseGeocoder(
+        config=AMapReverseGeocoderConfig(
             api_key=settings.amap_api_key,
             base_url=settings.amap_base_url,
             timeout_seconds=settings.amap_timeout_seconds,
@@ -103,6 +112,7 @@ def build_container(settings: Settings) -> AppContainer:
         store=store,
         replay_buffer=replay_buffer,
         session_store=session_store,
+        reverse_geocoder=reverse_geocoder,
         tool_registry=tool_registry,
         react_runtime=react_runtime,
         orchestrator=orchestrator,

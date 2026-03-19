@@ -20,6 +20,35 @@ class Location(BaseModel):
     lat: float = Field(..., description="Latitude in WGS84.")
 
 
+class ClientLocationContext(BaseModel):
+    """Browser geolocation plus optional reverse-geocoded region context."""
+
+    lng: float = Field(..., description="Longitude in WGS84.")
+    lat: float = Field(..., description="Latitude in WGS84.")
+    accuracy_m: float | None = Field(default=None, ge=0, description="Browser-reported accuracy in meters.")
+    province: str | None = None
+    city: str | None = None
+    district: str | None = None
+    township: str | None = None
+    adcode: str | None = None
+    formatted_address: str | None = None
+    region_text: str | None = None
+
+
+class ReverseGeocodeRequest(BaseModel):
+    """Lookup request for browser coordinates."""
+
+    lng: float = Field(..., description="Longitude in WGS84.")
+    lat: float = Field(..., description="Latitude in WGS84.")
+    accuracy_m: float | None = Field(default=None, ge=0, description="Browser-reported accuracy in meters.")
+
+
+class ReverseGeocodeResponse(ClientLocationContext):
+    """Reverse-geocode result returned to the browser."""
+
+    resolved: bool = False
+
+
 class ArcadeTitleDto(BaseModel):
     """Title machine item under a single shop."""
 
@@ -109,7 +138,7 @@ class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=2000)
     intent: IntentType | None = None
     shop_id: int | None = None
-    location: Location | None = None
+    location: ClientLocationContext | None = None
     keyword: str | None = None
     province_code: str | None = None
     city_code: str | None = None

@@ -222,6 +222,11 @@ class ReactRuntime:
 
         request_payload = request.model_dump(mode="json")
         state.working_memory["last_request"] = request_payload
+        if request.location is not None:
+            state.working_memory["client_location"] = request.location.model_dump(
+                mode="json",
+                exclude_none=True,
+            )
         if request.shop_id is not None:
             state.working_memory["last_shop_id"] = request.shop_id
         if request.keyword:

@@ -64,11 +64,35 @@ export type PagedArcades = {
 export type IntentType = "search" | "search_nearby" | "navigate";
 export type ChatSessionStatus = "idle" | "running" | "completed" | "failed";
 
+export type ClientLocationContext = {
+  lng: number;
+  lat: number;
+  accuracy_m?: number | null;
+  province?: string | null;
+  city?: string | null;
+  district?: string | null;
+  township?: string | null;
+  adcode?: string | null;
+  formatted_address?: string | null;
+  region_text?: string | null;
+};
+
+export type ReverseGeocodeRequest = {
+  lng: number;
+  lat: number;
+  accuracy_m?: number | null;
+};
+
+export type ReverseGeocodeResponse = ClientLocationContext & {
+  resolved: boolean;
+};
+
 export type ChatRequest = {
   session_id?: string;
   message: string;
   intent?: IntentType;
   shop_id?: number;
+  location?: ClientLocationContext;
   keyword?: string;
   province_code?: string;
   city_code?: string;
