@@ -6,7 +6,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 
-from fastapi import APIRouter, Depends, Header, Query
+from fastapi import APIRouter, Depends, Header, Query, Request
 from fastapi.responses import StreamingResponse
 
 from app.api.deps import get_container
@@ -23,6 +23,7 @@ def _format_sse(*, event: str, data: dict, event_id: int) -> str:
 @router.get("/api/stream/{session_id}")
 async def stream(
     session_id: str,
+    request: Request,
     last_event_id: int | None = Query(default=None),
     last_event_id_header: str | None = Header(default=None, alias="Last-Event-ID"),
     container: AppContainer = Depends(get_container),
@@ -35,7 +36,9 @@ async def stream(
             except ValueError:
                 cursor = None
         waited = 0
-        while waited < container.settings.sse_max_wait_seconds:
+        while True:
+            if await request.is_disconnected():
+                return
             events = container.replay_buffer.list_events(session_id, cursor)
             if events:
                 for evt in events:
@@ -45,9 +48,21 @@ async def stream(
                         data=evt.model_dump(mode="json"),
                         event_id=evt.id,
                     )
+                    if evt.event in {"assistant.completed", "session.failed"}:
+                        return
+                waited = 0
             else:
+                snapshot = container.session_store.snapshot(session_id)
+                session_status = snapshot.status if snapshot is not None else None
+                if session_status in {"completed", "failed"}:
+                    return
                 yield ": keep-alive\n\n"
-            waited += 1
+                waited += 1
+                if (
+                    session_status not in {"running"}
+                    and waited >= container.settings.sse_max_wait_seconds
+                ):
+                    return
             await asyncio.sleep(container.settings.sse_keepalive_seconds)
 
     return StreamingResponse(iterator(), media_type="text/event-stream")

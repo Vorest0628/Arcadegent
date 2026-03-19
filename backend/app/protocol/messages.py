@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 IntentType = Literal["search_nearby", "navigate", "search"]
 ChatRoleType = Literal["user", "assistant", "tool"]
 ProviderType = Literal["amap", "google", "none"]
+ChatSessionStatusType = Literal["idle", "running", "completed", "failed"]
 
 
 class Location(BaseModel):
@@ -126,6 +127,13 @@ class ChatResponse(BaseModel):
     route: RouteSummaryDto | None = None
 
 
+class ChatSessionDispatchDto(BaseModel):
+    """Accepted async chat dispatch response."""
+
+    session_id: str
+    status: ChatSessionStatusType
+
+
 class ChatHistoryTurnDto(BaseModel):
     """Persisted chat history turn for one session."""
 
@@ -143,6 +151,7 @@ class ChatSessionSummaryDto(BaseModel):
     title: str
     preview: str | None = None
     intent: IntentType
+    status: ChatSessionStatusType
     turn_count: int
     created_at: str
     updated_at: str
@@ -154,6 +163,11 @@ class ChatSessionDetailDto(BaseModel):
     session_id: str
     intent: IntentType
     active_subagent: str
+    status: ChatSessionStatusType
+    last_error: str | None = None
+    reply: str | None = None
+    shops: list[ArcadeShopSummaryDto] = Field(default_factory=list)
+    route: RouteSummaryDto | None = None
     turn_count: int
     created_at: str
     updated_at: str

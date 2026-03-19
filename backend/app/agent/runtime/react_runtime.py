@@ -160,10 +160,54 @@ class ReactRuntime:
             session_store=session_store,
         )
 
+    def prepare_session(self, session_id: str) -> None:
+        """Clear stale stream events and mark the session as running for a fresh turn."""
+        state = self._session_store.get_or_create(session_id)
+        state.status = "running"
+        state.last_error = None
+        state.updated_at = _utc_now_iso()
+        self._session_store.save(state)
+        self._replay_buffer.reset(session_id)
+
     def run_chat(self, request: ChatRequest) -> ChatResponse:
         """Session-aware chat execution with multi-turn tool loop."""
         session_id = request.session_id or f"s_{uuid4().hex[:12]}"
         state = self._session_store.get_or_create(session_id)
+        state.status = "running"
+        state.last_error = None
+        state.updated_at = _utc_now_iso()
+        self._session_store.save(state)
+        try:
+            return self._run_chat_session(request=request, session_id=session_id, state=state)
+        except Exception as exc:
+            error_message = _short(f"{type(exc).__name__}: {exc}", limit=280) if str(exc) else type(exc).__name__
+            state.status = "failed"
+            state.last_error = error_message
+            state.working_memory["last_error"] = {"message": error_message}
+            state.updated_at = _utc_now_iso()
+            self._session_store.save(state)
+            self._replay_buffer.append(
+                session_id,
+                "session.failed",
+                {
+                    "error": error_message,
+                    "active_subagent": state.active_subagent,
+                },
+            )
+            logger.exception(
+                "chat.failed session_id=%s active_subagent=%s",
+                session_id,
+                state.active_subagent,
+            )
+            raise
+
+    def _run_chat_session(
+        self,
+        *,
+        request: ChatRequest,
+        session_id: str,
+        state: AgentSessionState,
+    ) -> ChatResponse:
         state.turn_index += 1
 
         inferred_intent = request.intent or _infer_intent(request.message)
@@ -320,9 +364,19 @@ class ReactRuntime:
                 payload={"final": True},
             ),
         )
+        state.status = "completed"
+        state.last_error = None
         state.working_memory["reply"] = final_text
+        state.updated_at = _utc_now_iso()
         self._session_store.save(state)
-        self._replay_buffer.append(session_id, "assistant.completed", {"reply": final_text})
+        self._replay_buffer.append(
+            session_id,
+            "assistant.completed",
+            {
+                "reply": final_text,
+                "active_subagent": state.active_subagent,
+            },
+        )
         logger.info(
             "chat.done session_id=%s intent=%s shops=%s reply=%s",
             session_id,
@@ -424,4 +478,3 @@ class ReactRuntime:
                     "text_preview": _short(merged, limit=120),
                 },
             )
-

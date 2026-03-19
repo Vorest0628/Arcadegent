@@ -1,10 +1,11 @@
 """FastMCP client lifecycle helpers used by the MCP tool gateway."""
-"""
-这里是一些FastMCP客户端的生命周期管理工具，供MCP工具网关使用。
-核心功能就包括两个：列出工具和调用工具，支持同步或者异步调用（内部会自动根据当前线程环境选择合适的方式）。
-通过这个manager，我们就可以把FastMCP的异步接口包装成同步接口，方便在不支持异步的环境中使用。
-"""
 from __future__ import annotations
+
+# 这里是一些FastMCP客户端的生命周期管理工具，供MCP工具网关使用。
+# 核心功能就包括两个：列出工具和调用工具，支持同步或者异步调用
+# （内部会自动根据当前线程环境选择合适的方式）。
+# 通过这个 manager，我们就可以把 FastMCP 的异步接口包装成同步接口，
+# 方便在不支持异步的环境中使用。
 
 import asyncio
 import threading

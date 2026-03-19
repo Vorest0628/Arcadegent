@@ -2,6 +2,7 @@ import type {
   ArcadeDetail,
   ArcadeSortBy,
   ChatRequest,
+  ChatSessionDispatch,
   ChatResponse,
   ChatSessionDetail,
   ChatSessionSummary,
@@ -86,6 +87,10 @@ export async function listCounties(cityCode: string): Promise<RegionItem[]> {
 
 export async function sendChat(payload: ChatRequest): Promise<ChatResponse> {
   return postJson<ChatResponse>("/api/chat", payload);
+}
+
+export async function dispatchChatSession(payload: ChatRequest): Promise<ChatSessionDispatch> {
+  return postJson<ChatSessionDispatch>("/api/chat/sessions", payload);
 }
 
 export function buildChatStreamUrl(sessionId: string, lastEventId?: number): string {

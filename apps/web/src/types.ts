@@ -62,6 +62,7 @@ export type PagedArcades = {
 };
 
 export type IntentType = "search" | "search_nearby" | "navigate";
+export type ChatSessionStatus = "idle" | "running" | "completed" | "failed";
 
 export type ChatRequest = {
   session_id?: string;
@@ -92,6 +93,11 @@ export type ChatResponse = {
   route?: RouteSummary | null;
 };
 
+export type ChatSessionDispatch = {
+  session_id: string;
+  status: ChatSessionStatus;
+};
+
 export type ChatHistoryTurn = {
   role: "user" | "assistant" | "tool";
   content: string;
@@ -105,6 +111,7 @@ export type ChatSessionSummary = {
   title: string;
   preview?: string | null;
   intent: IntentType;
+  status: ChatSessionStatus;
   turn_count: number;
   created_at: string;
   updated_at: string;
@@ -114,6 +121,11 @@ export type ChatSessionDetail = {
   session_id: string;
   intent: IntentType;
   active_subagent: string;
+  status: ChatSessionStatus;
+  last_error?: string | null;
+  reply?: string | null;
+  shops: ArcadeSummary[];
+  route?: RouteSummary | null;
   turn_count: number;
   created_at: string;
   updated_at: string;

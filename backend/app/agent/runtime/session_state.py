@@ -12,6 +12,7 @@ from threading import Lock
 from typing import Any, Literal
 
 TurnRole = Literal["user", "assistant", "tool"]
+SessionStatus = Literal["idle", "running", "completed", "failed"]
 logger = logging.getLogger(__name__)
 
 
@@ -40,6 +41,8 @@ class AgentSessionState:
     turn_index: int = 0
     active_subagent: str = "intent_router"
     intent: str = "search"
+    status: SessionStatus = "idle"
+    last_error: str | None = None
     turns: list[AgentTurn] = field(default_factory=list)
     working_memory: dict[str, Any] = field(default_factory=dict)
     previous_response_id: str | None = None
@@ -62,7 +65,7 @@ class SessionStateStore:
             if state is None:
                 state = AgentSessionState(session_id=session_id)
                 self._states[session_id] = state
-            return state
+            return deepcopy(state)
 
     def snapshot(self, session_id: str) -> AgentSessionState | None:
         """Return deep-copied session state for API serialization."""
@@ -92,7 +95,7 @@ class SessionStateStore:
     def save(self, state: AgentSessionState) -> None:
         """Persist one mutated session state and flush the snapshot file."""
         with self._lock:
-            self._states[state.session_id] = state
+            self._states[state.session_id] = deepcopy(state)
             self._flush_to_disk_locked()
 
     def _load_from_disk(self) -> None:
@@ -138,6 +141,8 @@ def _state_to_dict(state: AgentSessionState) -> dict[str, Any]:
         "turn_index": state.turn_index,
         "active_subagent": state.active_subagent,
         "intent": state.intent,
+        "status": state.status,
+        "last_error": state.last_error,
         "turns": [
             {
                 "role": turn.role,
@@ -175,6 +180,8 @@ def _state_from_dict(raw: object) -> AgentSessionState | None:
         turn_index=_coerce_int(raw.get("turn_index"), default=0),
         active_subagent=_coerce_str(raw.get("active_subagent"), default="intent_router"),
         intent=_coerce_str(raw.get("intent"), default="search"),
+        status=_coerce_status(raw.get("status"), default="completed" if turns else "idle"),
+        last_error=raw.get("last_error") if isinstance(raw.get("last_error"), str) else None,
         turns=turns,
         working_memory=working_memory if isinstance(working_memory, dict) else {},
         previous_response_id=raw.get("previous_response_id")
@@ -218,5 +225,11 @@ def _coerce_int(raw: object, *, default: int) -> int:
 
 def _coerce_str(raw: object, *, default: str) -> str:
     if isinstance(raw, str) and raw:
+        return raw
+    return default
+
+
+def _coerce_status(raw: object, *, default: SessionStatus) -> SessionStatus:
+    if raw in {"idle", "running", "completed", "failed"}:
         return raw
     return default

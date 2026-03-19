@@ -1,7 +1,22 @@
 """Execution and result normalization for MCP-backed tools."""
-"""MCP支持的工具的执行和结果规范化。"""
 
 from __future__ import annotations
+
+# 这个模块定义了 MCPDispatcher 类，用于执行 MCP 工具并规范化其响应，
+# 以供运行时使用。
+# 以下是一些辅助函数，用于处理工具执行的输入和输出：
+# - `_coerce_int()`: 将任意值尝试转换为整数，如果无法转换则返回 None。
+# - `_serialize_json_safe()`: 尝试将值序列化为 JSON，如果失败则返回字符串表示。
+# - `_serialize_content_block()`: 将工具执行结果中的内容块序列化为字典格式。
+# - `_extract_text_from_content()`: 从工具执行结果的内容中提取文本信息。
+# - `_parse_polyline()`: 将字符串格式的路径信息解析为 Location 对象列表。
+# - `_normalize_polyline()`: 将不同格式的路径信息规范化为 Location 对象列表。
+# - `_infer_mode()`: 根据工具的远程名称和输入参数推断出路径规划的模式。
+# - `_fallback_polyline()`: 从输入参数中提取路径信息作为备选方案。
+# - `_extract_route_from_mapping()`: 从工具执行结果的不同层级中提取路径信息并构建 RouteSummaryDto。
+# - `maybe_extract_route_payload()`: 尝试从工具执行结果中提取路径信息。
+# - `pick_route_descriptor()`: 从工具描述符列表中选择一个最适合路径规划的工具描述符。
+# - `build_route_arguments()`: 根据工具描述符和路径规划输入参数构建工具执行参数字典。
 
 import json
 from typing import Any
@@ -11,22 +26,6 @@ from app.agent.tools.mcp.discovery import coerce_str
 from app.agent.tools.mcp.models import MCPExecutionResult, MCPServerConfig, MCPToolDescriptor
 from app.protocol.messages import Location, RouteSummaryDto
 
-"""
-这个模块定义了MCPDispatcher类，用于执行MCP工具并规范化其响应以供运行时使用。
-以下是一些辅助函数，用于处理工具执行的输入和输出：
-- `_coerce_int()`: 将任意值尝试转换为整数，如果无法转换则返回None。
-- `_serialize_json_safe()`: 尝试将值序列化为JSON，如果失败则返回字符串表示。
-- `_serialize_content_block()`: 将工具执行结果中的内容块序列化为字典格式。
-- `_extract_text_from_content()`: 从工具执行结果的内容中提取文本信息。
-- `_parse_polyline()`: 将字符串格式的路径信息解析为Location对象列表。
-- `_normalize_polyline()`: 将不同格式的路径信息规范化为Location对象列表。
-- `_infer_mode()`: 根据工具的远程名称和输入参数推断出路径规划的模式（如步行或驾车）。
-- `_fallback_polyline()`: 从输入参数中提取路径信息作为备选方案。
-- `_extract_route_from_mapping()`: 从工具执行结果的不同层级中提取路径信息并构建RouteSummaryDto对象。
-- `maybe_extract_route_payload()`: 尝试从工具执行结果中提取路径信息。
-- `pick_route_descriptor()`: 从工具描述符列表中选择一个最适合路径规划的工具描述符。
-- `build_route_arguments()`: 根据工具描述符和路径规划的输入参数构建工具执行所需的参数字典。
-"""
 
 def _coerce_int(value: Any) -> int | None:
     if value is None:

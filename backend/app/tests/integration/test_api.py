@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -67,6 +68,29 @@ def _build_client_with_rows(
     return TestClient(create_app())
 
 
+def _wait_for_session_status(
+    client: TestClient,
+    session_id: str,
+    expected_status: str,
+    *,
+    timeout_seconds: float = 3.0,
+) -> dict[str, object]:
+    deadline = time.monotonic() + timeout_seconds
+    last_payload: dict[str, object] | None = None
+    while time.monotonic() < deadline:
+        resp = client.get(f"/api/v1/chat/sessions/{session_id}")
+        if resp.status_code == 200:
+            payload = resp.json()
+            if isinstance(payload, dict):
+                last_payload = payload
+                if payload.get("status") == expected_status:
+                    return payload
+        time.sleep(0.05)
+    raise AssertionError(
+        f"session '{session_id}' did not reach status '{expected_status}', last_payload={last_payload}"
+    )
+
+
 def test_health_arcades_and_chat(tmp_path: Path) -> None:
     client = _build_client(tmp_path)
 
@@ -117,6 +141,7 @@ def test_chat_reuses_session_context(tmp_path: Path) -> None:
     assert detail_resp.status_code == 200
     detail = detail_resp.json()
     assert detail["session_id"] == session_id
+    assert detail["status"] == "completed"
     assert detail["turn_count"] >= 2
     turns = detail["turns"]
     assert turns
@@ -150,9 +175,85 @@ def test_chat_sessions_survive_app_restart(tmp_path: Path) -> None:
     assert detail_resp.status_code == 200
     detail = detail_resp.json()
     assert detail["session_id"] == session_id
+    assert detail["status"] == "completed"
     assert detail["turn_count"] >= 2
     assert detail["turns"][0]["role"] == "user"
     assert detail["turns"][-1]["role"] == "assistant"
+
+
+def test_second_turn_resets_stream_replay_buffer(tmp_path: Path) -> None:
+    client = _build_client(tmp_path)
+
+    first_resp = client.post("/api/chat", json={"message": "松江区有哪些机厅可以去？", "page_size": 3})
+    assert first_resp.status_code == 200
+    session_id = first_resp.json()["session_id"]
+
+    replay_buffer = client.app.state.container.replay_buffer
+    first_events = replay_buffer.list_events(session_id)
+    assert first_events
+    first_event_ids = {event.id for event in first_events}
+    assert any(event.event == "assistant.completed" for event in first_events)
+
+    second_resp = client.post(
+        "/api/chat",
+        json={"session_id": session_id, "message": "上海松江区", "page_size": 3},
+    )
+    assert second_resp.status_code == 200
+
+    second_events = replay_buffer.list_events(session_id)
+    assert second_events
+    assert all(event.id not in first_event_ids for event in second_events)
+    assert any(event.event == "assistant.completed" for event in second_events)
+
+
+def test_chat_dispatch_runs_in_background(tmp_path: Path) -> None:
+    client = _build_client(tmp_path)
+
+    dispatch_resp = client.post("/api/chat/sessions", json={"message": "find Gamma", "page_size": 3})
+    assert dispatch_resp.status_code == 202
+    dispatch_payload = dispatch_resp.json()
+    session_id = dispatch_payload["session_id"]
+    assert dispatch_payload["status"] == "running"
+
+    detail = _wait_for_session_status(client, session_id, "completed")
+    assert detail["session_id"] == session_id
+    assert detail["reply"]
+    assert detail["turn_count"] >= 2
+    assert detail["turns"][0]["role"] == "user"
+    assert detail["turns"][-1]["role"] == "assistant"
+
+    sessions_resp = client.get("/api/v1/chat/sessions")
+    assert sessions_resp.status_code == 200
+    sessions = sessions_resp.json()
+    session_row = next(row for row in sessions if row["session_id"] == session_id)
+    assert session_row["status"] == "completed"
+
+
+def test_chat_dispatch_rejects_duplicate_running_session(tmp_path: Path) -> None:
+    client = _build_client(tmp_path)
+    runtime = client.app.state.container.react_runtime
+    original_run_chat = runtime.run_chat
+
+    def slow_run_chat(request):
+        time.sleep(0.2)
+        return original_run_chat(request)
+
+    runtime.run_chat = slow_run_chat  # type: ignore[method-assign]
+
+    session_id = "s_duplicate123"
+    first_resp = client.post(
+        "/api/chat/sessions",
+        json={"session_id": session_id, "message": "find Gamma", "page_size": 3},
+    )
+    assert first_resp.status_code == 202
+
+    second_resp = client.post(
+        "/api/chat/sessions",
+        json={"session_id": session_id, "message": "find Gamma again", "page_size": 3},
+    )
+    assert second_resp.status_code == 409
+
+    _wait_for_session_status(client, session_id, "completed")
 
 
 def test_arcades_api_supports_title_quantity_sorting(tmp_path: Path) -> None:

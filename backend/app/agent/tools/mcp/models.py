@@ -1,7 +1,9 @@
 """Shared models and constants for MCP-backed tools."""
-"""这里存放一些MCP工具相关的模型和常量定义（可以类比成interface），供discovery、gateway、client_manager等模块使用。"""
 
 from __future__ import annotations
+
+# 这里存放一些 MCP 工具相关的模型和常量定义（可以类比成 interface），
+# 供 discovery、gateway、client_manager 等模块使用。
 
 from dataclasses import dataclass, field
 from typing import Any

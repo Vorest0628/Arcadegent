@@ -1,10 +1,10 @@
 """FastMCP-backed discovery and dispatch bridge for runtime tools."""
-"""基于FastMCP的发现和调度桥梁，用于运行时工具。
-总得来说属于一个工具网关，负责发现MCP工具并通过FastMCP客户端执行它们。
-是本模块下的核心类，提供了工具发现、工具定义构建、工具执行和路径规划等功能。
-"""
 
 from __future__ import annotations
+
+# 基于 FastMCP 的发现和调度桥梁，用于运行时工具。
+# 总得来说属于一个工具网关，负责发现 MCP 工具并通过 FastMCP 客户端执行它们。
+# 是本模块下的核心类，提供了工具发现、工具定义构建、工具执行和路径规划等功能。
 
 from pathlib import Path
 from typing import Any

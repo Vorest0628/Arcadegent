@@ -1,7 +1,20 @@
 """Tool discovery helpers for MCP-backed tool providers."""
-"""工具发现助手，用于基于MCP的工具提供者。"""
 
 from __future__ import annotations
+
+# 这里定义了一些工具发现的辅助函数，主要用于处理 MCP 工具的描述符、
+# URL 处理、时间格式化等功能。
+# 这些函数包括：
+# - `utc_now_iso()`: 获取当前 UTC 时间的 ISO 格式字符串。
+# - `short()`: 将文本压缩成单行，并限制长度。
+# - `coerce_str()`: 将任意值转换为字符串，如果不是字符串或者是空字符串，则返回 None。
+# - `local_tool_name()`: 根据服务器名称和远程工具名称生成本地工具名称。
+# - `infer_source_type()`: 根据工具的 source 属性推断工具的类型。
+# - `with_query_param()`: 在 URL 中添加查询参数。
+# - `mask_url()`: 对 URL 中的敏感信息进行掩码处理。
+# - `discover_tools()`: 从原始工具列表中提取工具描述符。
+# - `build_tool_definitions()`: 根据工具描述符构建工具定义列表，供模型使用。
+# - `pick_route_tool()`: 根据工具描述符和服务器配置选择一个最合适的工具作为路径规划工具。
 
 import json
 from datetime import datetime, timezone
@@ -16,19 +29,7 @@ from app.agent.tools.mcp.models import (
     MCP_TOOL_WILDCARD,
 )
 
-"""这里定义了一些工具发现的辅助函数，主要用于处理MCP工具的描述符、URL处理、时间格式化等功能。
-这些函数包括：
-- `utc_now_iso()`: 获取当前UTC时间的ISO格式字符串。
-- `short()`: 将文本压缩成单行，并限制长度。
-- `coerce_str()`: 将任意值转换为字符串，如果不是字符串或者是空字符串，则返回None。
-- `local_tool_name()`: 根据服务器名称和远程工具名称生成本地工具名称。
-- `infer_source_type()`: 根据工具的source属性推断工具的类型。
-- `with_query_param()`: 在URL中添加查询参数。
-- `mask_url()`: 对URL中的敏感信息进行掩码处理。
-- `discover_tools()`: 从原始工具列表中提取工具描述符。
-- `build_tool_definitions()`: 根据工具描述符构建工具定义列表，供模型使用。
-- `pick_route_tool()`: 根据工具描述符和服务器配置选择一个最合适的工具作为路径规划工具。
-"""
+
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 

@@ -31,6 +31,11 @@ class ReplayBuffer:
             bucket.append(event)
             return event
 
+    def reset(self, session_id: str) -> None:
+        """Drop buffered events for one session before a fresh execution starts."""
+        with self._lock:
+            self._sessions.pop(session_id, None)
+
     def list_events(self, session_id: str, last_event_id: int | None = None) -> list[StreamEvent]:
         """List buffered events newer than last_event_id."""
         with self._lock:
@@ -40,4 +45,3 @@ class ReplayBuffer:
             if last_event_id is None:
                 return list(bucket)
             return [item for item in bucket if item.id > last_event_id]
-
