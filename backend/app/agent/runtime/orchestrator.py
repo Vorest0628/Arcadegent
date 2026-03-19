@@ -1,5 +1,6 @@
-"""Compatibility entrypoint: delegate chat execution to ReAct runtime."""
-"""兼容性入口点：将聊天执行委托给ReAct运行时。"""
+"""Compatibility entrypoint: delegate chat execution to ReAct runtime.
+兼容性入口点：将聊天执行委托给ReAct运行时。
+"""
 
 from __future__ import annotations
 
