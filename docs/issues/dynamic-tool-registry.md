@@ -2,7 +2,7 @@
 
 - 日期: 2026-03-19
 - 优先级: P1
-- 状态: Open / Backlog
+- 状态: Done / Closed
 - 影响范围: `backend/app/agent/tools`, `backend/app/core/container.py`, `backend/app/agent/subagents`
 
 ## 背景
@@ -137,8 +137,43 @@ ToolRegistry
 - builtin 与 MCP tool 在 definitions 与 execute 两条链路上采用统一路由模型。
 - `allowed_tools`、权限校验和健康检查仍能正常工作。
 
+## 实施结果
+
+该 issue 已在 2026-03-26 完成，本次落地结果如下：
+
+- builtin tool manifest 已拆分为 `tools_manifest.json + schemas/*.json`。
+- 每个 builtin tool 都拥有自己的 JSON definition，而不是回到中心 `schemas.py` 登记。
+- 每个 builtin tool 都通过自己的 executor import path 执行，而不是回到中心 `handlers.py` 登记。
+- `BuiltinToolProvider` 只负责装配 tool definitions、shared services 和 JSON Schema validator。
+- `ToolRegistry` 继续保持 provider-oriented 路由，不需要重新引入 builtin 分支判断。
+
+这次的关键不是“把配置搬到 JSON”，而是把 builtin tool 的 schema 与执行入口都真正做成了局部自描述。
+
+## 设计取舍
+
+本次实现刻意没有继续做“一个中心 handlers 模块接所有工具”，因为那只会把硬编码从 registry 挪到另一个中心文件里。
+
+最终边界是：
+
+- `provider.py` 只做装配
+- `schemas/*.json` 负责自描述
+- `executors/*.py` 负责工具执行
+- `executor_utils.py` 仅允许放无业务归属的公共纯函数
+
+这保证了新增 builtin tool 时，不再需要回到中心模块改多处登记点。
+
+## 后续候选能力
+
+以下方向值得继续做，但不属于本 issue 的未完成项：
+
+1. zip 一键解析并加载 executor、tool definitions 与 manifest。
+2. 一键卸载 tools，并联动 registry refresh 与本地安装状态清理。
+
+这些能力更接近“tool bundle / plugin package management”，可以单独立新 issue 继续推进。
+
 ## 关联文档
 
 - [subagent 结束信号与 pointer 解耦](./2026-03-19-subagent-pointer-decoupling.md)
 - [链式 subagent 改为主 agent hub](./2026-03-19-main-agent-hub-architecture.md)
 - [Arcadegent FastMCP MCP Client 接入实施文档](../fastmcp-mcp-client-implementation-plan.md)
+- [动态工具注册表实现细节](../dev-details/dynamic-tool-registry-implementation.md)

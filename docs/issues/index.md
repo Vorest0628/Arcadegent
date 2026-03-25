@@ -1,6 +1,6 @@
 # Issue 索引
 
-更新时间：2026-03-19
+更新时间：2026-03-26
 
 本目录用于沉淀可追踪的问题文档。当前先覆盖两类来源：
 
@@ -15,7 +15,7 @@
 | AGT-002 | P1 | Open / Backlog | [链式 subagent 改为主 agent hub](./main-agent-hub-architecture.md) | 本轮问题 2 |
 | AGT-003 | P1 | Open / Backlog | [会话执行异步化与 SSE 预备改造](./chat-async-and-sse-readiness.md) | 本轮问题 3 |
 | AGT-004 | P2 | Open / Backlog | [Markdown 渲染与地图视图 renderer 子智能体](./markdown-map-view-renderer.md) | 本轮问题 4 |
-| AGT-005 | P1 | Open / Backlog | [工具注册表从静态注入改为动态装配](./dynamic-tool-registry.md) | 本轮问题 5 |
+| ~~AGT-005~~ | P1 | Done / Closed | ~~[工具注册表从静态注入改为动态装配](./dynamic-tool-registry.md)~~ | 本轮问题 5 |
 | AGT-006 | P2 | Open / Backlog | [本地 JSONL 读模型升级为可替换数据层](./storage-read-model-upgrade.md) | README 当前限制 |
 | AGT-007 | P2 | Open / Backlog | [高德 MCP tool 自动识别鲁棒性增强](./amap-mcp-discovery-hardening.md) | README 当前限制 |
 | AGT-008 | P2 | Open / Backlog | [路线规划能力降级策略显式化](./route-capability-degradation-visibility.md) | README 当前限制 |

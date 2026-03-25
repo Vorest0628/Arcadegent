@@ -30,6 +30,10 @@ supabase/migrations/  数据库迁移草案
 docs/                 计划、交接和开发说明
 ```
 
+## 文档入口
+
+- 内建工具动态注册表写法：[`docs/builtin-tool-manifest-guide.md`](/Users/george/coding/Arcadegent/docs/builtin-tool-manifest-guide.md)，对应 manifest 在 [`backend/app/agent/tools/builtin/tools_manifest.json`](/Users/george/coding/Arcadegent/backend/app/agent/tools/builtin/tools_manifest.json)
+
 ## 环境要求
 
 - Python `>=3.11`

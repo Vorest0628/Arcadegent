@@ -1,57 +1,18 @@
-"""Unified tool registry with schema validation and execution dispatch."""
+"""Unified tool registry with provider-based validation and execution routing."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-import re
+from fnmatch import fnmatchcase
 from typing import Any
 
 from pydantic import ValidationError
 from pydantic_core import ErrorDetails
 
-from app.agent.tools.builtin.db_query_tool import DBQueryTool
-from app.agent.tools.builtin.geo_resolve_tool import GeoResolveTool
-from app.agent.tools.builtin.route_plan_tool import RoutePlanTool
-from app.agent.tools.builtin.select_next_subagent_tool import SelectNextSubagentTool
-from app.agent.tools.builtin.summary_tool import SummaryTool
+from app.agent.tools.base import ToolDescriptor, ToolInputValidationError, ToolProvider
+from app.agent.tools.builtin.provider import BuiltinToolProvider
 from app.agent.tools.mcp_gateway import MCPToolGateway
 from app.agent.tools.permission import ToolPermissionChecker, ToolPermissionError
-from app.agent.tools.schemas import (
-    DBQueryArgs,
-    GeoResolveArgs,
-    RoutePlanArgs,
-    SelectNextSubagentArgs,
-    SummaryArgs,
-    TOOL_ARG_MODELS,
-    build_tool_definitions,
-)
-from app.infra.observability.logger import get_logger
-from app.protocol.messages import Location, RouteSummaryDto
-
-_REGION_CODE_PATTERN = re.compile(r"^\d{12}$")
-logger = get_logger(__name__)
-
-
-def _as_region_code_or_name(
-    code_value: str | None,
-    name_value: str | None,
-) -> tuple[str | None, str | None]:
-    code = code_value.strip() if isinstance(code_value, str) else None
-    name = name_value.strip() if isinstance(name_value, str) else None
-    if code and not _REGION_CODE_PATTERN.fullmatch(code):
-        if not name:
-            name = code
-        code = None
-    return code or None, name or None
-
-
-def _short(text: str | None, *, limit: int = 80) -> str:
-    if not isinstance(text, str):
-        return ""
-    compact = " ".join(text.split())
-    if len(compact) <= limit:
-        return compact
-    return f"{compact[: max(1, limit - 3)].rstrip()}..."
 
 
 @dataclass(frozen=True)
@@ -66,42 +27,76 @@ class ToolExecutionResult:
 
 
 class ToolRegistry:
-    """Schema-first runtime entrypoint for builtin tools."""
+    """Provider-oriented runtime entrypoint for builtin and MCP tools."""
 
     def __init__(
         self,
         *,
-        db_query_tool: DBQueryTool,
-        geo_resolve_tool: GeoResolveTool,
-        route_plan_tool: RoutePlanTool,
-        summary_tool: SummaryTool,
-        select_next_subagent_tool: SelectNextSubagentTool,
+        providers: list[ToolProvider] | None = None,
         permission_checker: ToolPermissionChecker,
-        mcp_tool_gateway: MCPToolGateway | None = None,
         strict_schema: bool = True,
+        **legacy_dependencies: Any,
     ) -> None:
-        self._db_query_tool = db_query_tool
-        self._geo_resolve_tool = geo_resolve_tool
-        self._route_plan_tool = route_plan_tool
-        self._summary_tool = summary_tool
-        self._select_next_subagent_tool = select_next_subagent_tool
         self._permission_checker = permission_checker
-        self._mcp_tool_gateway = mcp_tool_gateway or MCPToolGateway()
         self._strict_schema = strict_schema
+        self._providers = list(
+            providers or self._build_legacy_providers(legacy_dependencies=legacy_dependencies)
+        )
+
+    def get_tools(self, *, allowed_tools: list[str] | None = None) -> dict[str, ToolDescriptor]:
+        tools, _ = self._collect_tools()
+        if allowed_tools is None:
+            return tools
+        return {
+            name: descriptor
+            for name, descriptor in tools.items()
+            if self._matches_allowed_tools(name, allowed_tools)
+        }
+
+    def gettools(self, *, allowed_tools: list[str] | None = None) -> dict[str, ToolDescriptor]:
+        """Compatibility alias for provider-aggregated tool discovery."""
+        return self.get_tools(allowed_tools=allowed_tools)
 
     def tool_definitions(self, *, allowed_tools: list[str]) -> list[dict[str, Any]]:
-        builtin = build_tool_definitions(allowed_tools, strict=self._strict_schema)
-        dynamic = self._mcp_tool_gateway.build_tool_definitions(
-            allowed_tools=allowed_tools,
-            strict=self._strict_schema,
-        )
-        return builtin + dynamic
+        tools = self.get_tools()
+        definitions: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for pattern in allowed_tools:
+            matched_names = [name for name in tools if fnmatchcase(name, pattern)]
+            if any(token in pattern for token in "*?["):
+                matched_names.sort()
+            for name in matched_names:
+                if name in seen:
+                    continue
+                descriptor = tools[name]
+                definitions.append(self._definition_from_descriptor(descriptor))
+                seen.add(name)
+        return definitions
+
+    def refresh_tools(self) -> None:
+        for provider in self._providers:
+            provider.refresh()
 
     def refresh_mcp_tools(self) -> None:
-        self._mcp_tool_gateway.refresh()
+        for provider in self._providers:
+            if provider.provider_name == "mcp":
+                provider.refresh()
+
+    def provider_health(self) -> dict[str, Any]:
+        return {
+            provider.provider_name: provider.health()
+            for provider in self._providers
+        }
 
     def mcp_health(self) -> dict[str, Any]:
-        return self._mcp_tool_gateway.health()
+        for provider in self._providers:
+            if provider.provider_name == "mcp":
+                return provider.health()
+        return {
+            "enabled": False,
+            "discovered_tool_count": 0,
+            "servers": {},
+        }
 
     def execute(
         self,
@@ -113,25 +108,25 @@ class ToolRegistry:
     ) -> ToolExecutionResult:
         try:
             self._permission_checker.ensure_allowed(tool_name=tool_name, allowed_tools=allowed_tools)
-            if self._mcp_tool_gateway.has_tool(tool_name):
-                mcp_result = self._mcp_tool_gateway.execute(
-                    tool_name=tool_name,
-                    raw_arguments=raw_arguments,
-                )
-                return ToolExecutionResult(
-                    call_id=call_id,
-                    tool_name=tool_name,
-                    status=mcp_result.status,
-                    output=mcp_result.output,
-                    error_message=mcp_result.error_message,
-                )
-            validated = self._validate_arguments(tool_name=tool_name, raw_arguments=raw_arguments)
-            output = self._dispatch(tool_name=tool_name, validated=validated)
+            tools, owners = self._collect_tools()
+            descriptor = tools.get(tool_name)
+            provider = owners.get(tool_name)
+            if descriptor is None or provider is None:
+                raise ValueError(f"unknown_tool:{tool_name}")
+            validated = raw_arguments
+            if descriptor.validator is not None:
+                validated = descriptor.validator(raw_arguments)
+            result = provider.execute(
+                tool_name=tool_name,
+                raw_arguments=raw_arguments,
+                validated_arguments=validated,
+            )
             return ToolExecutionResult(
                 call_id=call_id,
                 tool_name=tool_name,
-                status="completed",
-                output=output,
+                status=result.status,
+                output=result.output,
+                error_message=result.error_message,
             )
         except ToolPermissionError as exc:
             return self._failed(
@@ -148,6 +143,14 @@ class ToolRegistry:
                 message=str(exc),
                 details=exc.errors(),
             )
+        except ToolInputValidationError as exc:
+            return self._failed(
+                call_id=call_id,
+                tool_name=tool_name,
+                error_type="validation_error",
+                message=str(exc),
+                details=exc.details,
+            )
         except Exception as exc:  # pragma: no cover
             return self._failed(
                 call_id=call_id,
@@ -156,152 +159,57 @@ class ToolRegistry:
                 message=str(exc),
             )
 
-    def _validate_arguments(self, *, tool_name: str, raw_arguments: dict[str, Any]) -> Any:
-        model = TOOL_ARG_MODELS.get(tool_name)
-        if model is None:
-            raise ValueError(f"unknown_tool:{tool_name}")
-        return model.model_validate(raw_arguments)
-
-    def _dispatch(self, *, tool_name: str, validated: Any) -> dict[str, Any]:
-        if tool_name == "db_query_tool":
-            args = validated if isinstance(validated, DBQueryArgs) else DBQueryArgs.model_validate(validated)
-            if args.shop_id is not None:
-                shop = self._db_query_tool.get_shop(args.shop_id)
-                return {"shop": shop}
-
-            province_code, province_name = _as_region_code_or_name(
-                args.province_code,
-                args.province_name,
+    def _build_legacy_providers(self, *, legacy_dependencies: dict[str, Any]) -> list[ToolProvider]:
+        legacy = dict(legacy_dependencies)
+        mcp_tool_gateway = legacy.pop("mcp_tool_gateway", None) or MCPToolGateway()
+        builtin_services = {
+            key: legacy.pop(key)
+            for key in (
+                "db_query_tool",
+                "geo_resolve_tool",
+                "route_plan_tool",
+                "summary_tool",
+                "select_next_subagent_tool",
             )
-            city_code, city_name = _as_region_code_or_name(
-                args.city_code,
-                args.city_name,
-            )
-            county_code, county_name = _as_region_code_or_name(
-                args.county_code,
-                args.county_name,
-            )
-            sort_title_name = args.sort_title_name
-            if args.sort_by == "title_quantity" and not (sort_title_name or "").strip():
-                keyword = (args.keyword or "").strip()
-                if keyword:
-                    parts = [part for part in re.split(r"\s+", keyword) if part]
-                    if parts:
-                        sort_title_name = parts[-1]
-
-            rows, total = self._db_query_tool.search_shops(
-                keyword=args.keyword,
-                province_code=province_code,
-                city_code=city_code,
-                county_code=county_code,
-                province_name=province_name,
-                city_name=city_name,
-                county_name=county_name,
-                has_arcades=args.has_arcades,
-                page=args.page,
-                page_size=args.page_size,
-                sort_by=args.sort_by,
-                sort_order=args.sort_order,
-                sort_title_name=sort_title_name,
-            )
-            logger.info(
-                "db_query_tool.filters keyword=%s province_code=%s city_code=%s county_code=%s province_name=%s city_name=%s county_name=%s has_arcades=%s sort_by=%s sort_order=%s sort_title_name=%s page=%s page_size=%s total=%s",
-                _short(args.keyword),
-                province_code,
-                city_code,
-                county_code,
-                province_name,
-                city_name,
-                county_name,
-                args.has_arcades,
-                args.sort_by,
-                args.sort_order,
-                _short(sort_title_name),
-                args.page,
-                args.page_size,
-                total,
-            )
-            return {
-                "shops": rows,
-                "total": total,
-                "query": {
-                    "keyword": args.keyword,
-                    "province_code": province_code,
-                    "city_code": city_code,
-                    "county_code": county_code,
-                    "province_name": province_name,
-                    "city_name": city_name,
-                    "county_name": county_name,
-                    "has_arcades": args.has_arcades,
-                    "sort_by": args.sort_by,
-                    "sort_order": args.sort_order,
-                    "sort_title_name": sort_title_name,
-                    "page": args.page,
-                    "page_size": args.page_size,
-                },
-            }
-
-        if tool_name == "geo_resolve_tool":
-            args = validated if isinstance(validated, GeoResolveArgs) else GeoResolveArgs.model_validate(validated)
-            provider = self._geo_resolve_tool.resolve_provider(args.province_code)
-            return {"provider": provider}
-
-        if tool_name == "route_plan_tool":
-            args = validated if isinstance(validated, RoutePlanArgs) else RoutePlanArgs.model_validate(validated)
-            origin = Location(lng=args.origin.lng, lat=args.origin.lat)
-            destination = Location(lng=args.destination.lng, lat=args.destination.lat)
-            route = None
-            if args.provider == "amap":
-                route = self._mcp_tool_gateway.plan_amap_route(
-                    mode=args.mode,
-                    origin=origin,
-                    destination=destination,
+            if key in legacy
+        }
+        providers: list[ToolProvider] = []
+        if builtin_services:
+            providers.append(
+                BuiltinToolProvider(
+                    services={
+                        **builtin_services,
+                        "mcp_tool_gateway": mcp_tool_gateway,
+                    }
                 )
-            if route is None:
-                route = self._route_plan_tool.plan_route(
-                    provider=args.provider,
-                    mode=args.mode,
-                    origin=origin,
-                    destination=destination,
-                )
-            return {"route": route.model_dump(mode="json")}
-
-        if tool_name == "summary_tool":
-            args = validated if isinstance(validated, SummaryArgs) else SummaryArgs.model_validate(validated)
-            if args.topic == "navigation":
-                route_payload = args.route or {}
-                route = RouteSummaryDto.model_validate(route_payload)
-                reply = self._summary_tool.summarize_navigation(
-                    shop_name=args.shop_name or "target arcade",
-                    route=route,
-                )
-            else:
-                reply = self._summary_tool.summarize_search(
-                    keyword=args.keyword,
-                    total=int(args.total or 0),
-                    shops=args.shops or [],
-                    sort_by=args.sort_by,
-                    sort_order=args.sort_order,
-                    sort_title_name=args.sort_title_name,
-                )
-            return {"reply": reply}
-
-        if tool_name == "select_next_subagent":
-            args = (
-                validated
-                if isinstance(validated, SelectNextSubagentArgs)
-                else SelectNextSubagentArgs.model_validate(validated)
             )
-            return self._select_next_subagent_tool.select_next_subagent(
-                current_subagent=args.current_subagent,
-                intent=args.intent,
-                tool_name=args.tool_name,
-                tool_status=args.tool_status,
-                has_route=args.has_route,
-                has_shops=args.has_shops,
-            )
+        providers.append(mcp_tool_gateway)
+        return providers
 
-        raise ValueError(f"unknown_tool:{tool_name}")
+    def _collect_tools(self) -> tuple[dict[str, ToolDescriptor], dict[str, ToolProvider]]:
+        tools: dict[str, ToolDescriptor] = {}
+        owners: dict[str, ToolProvider] = {}
+        for provider in self._providers:
+            for name, descriptor in provider.get_tools().items():
+                if name in tools:
+                    raise ValueError(f"duplicate_tool:{name}")
+                tools[name] = descriptor
+                owners[name] = provider
+        return tools, owners
+
+    def _definition_from_descriptor(self, descriptor: ToolDescriptor) -> dict[str, Any]:
+        return {
+            "type": descriptor.kind,
+            "function": {
+                "name": descriptor.name,
+                "description": descriptor.description,
+                "parameters": descriptor.input_schema,
+                "strict": self._strict_schema,
+            },
+        }
+
+    def _matches_allowed_tools(self, tool_name: str, allowed_tools: list[str]) -> bool:
+        return any(fnmatchcase(tool_name, pattern) for pattern in allowed_tools)
 
     def _failed(
         self,

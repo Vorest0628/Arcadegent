@@ -1,0 +1,102 @@
+{
+  "name": "db_query_tool",
+  "kind": "function",
+  "description": "Search arcade shops by keyword and region. Use *_code for 12-digit region codes, or *_name for natural-language region names. Can also fetch one shop by shop_id. Supports sorting via sort_by/sort_order/sort_title_name.",
+  "executor": "app.agent.tools.builtin.executors.db_query:execute",
+  "capabilities": ["builtin", "read_only", "search"],
+  "metadata": {
+    "tool_function": "app.agent.tools.builtin.executors.db_query:execute"
+  },
+  "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "keyword": {
+        "anyOf": [{ "type": "string" }, { "type": "null" }],
+        "default": null,
+        "description": "Search keyword, e.g. `maimai` or `广州 maimai`.",
+        "title": "Keyword"
+      },
+      "province_code": {
+        "anyOf": [{ "type": "string" }, { "type": "null" }],
+        "default": null,
+        "description": "12-digit province code when available, e.g. `440000000000`.",
+        "title": "Province Code"
+      },
+      "city_code": {
+        "anyOf": [{ "type": "string" }, { "type": "null" }],
+        "default": null,
+        "description": "12-digit city code when available, e.g. `440100000000`.",
+        "title": "City Code"
+      },
+      "county_code": {
+        "anyOf": [{ "type": "string" }, { "type": "null" }],
+        "default": null,
+        "description": "12-digit county code when available.",
+        "title": "County Code"
+      },
+      "province_name": {
+        "anyOf": [{ "type": "string" }, { "type": "null" }],
+        "default": null,
+        "description": "Province name when code is unavailable, e.g. `广东`.",
+        "title": "Province Name"
+      },
+      "city_name": {
+        "anyOf": [{ "type": "string" }, { "type": "null" }],
+        "default": null,
+        "description": "City name when code is unavailable, e.g. `广州`.",
+        "title": "City Name"
+      },
+      "county_name": {
+        "anyOf": [{ "type": "string" }, { "type": "null" }],
+        "default": null,
+        "description": "County/district name when code is unavailable.",
+        "title": "County Name"
+      },
+      "has_arcades": {
+        "anyOf": [{ "type": "boolean" }, { "type": "null" }],
+        "default": null,
+        "description": "Whether to require rows containing at least one title.",
+        "title": "Has Arcades"
+      },
+      "sort_by": {
+        "default": "default",
+        "description": "Sort field. `title_quantity` sorts by machine `quantity`(qty) for one title; `arcade_count` sorts by number of distinct title entries in one shop. Use `default` to keep built-in deterministic order.",
+        "enum": ["default", "updated_at", "source_id", "arcade_count", "title_quantity"],
+        "title": "Sort By",
+        "type": "string"
+      },
+      "sort_order": {
+        "default": "desc",
+        "description": "Sort direction for `sort_by`.",
+        "enum": ["asc", "desc"],
+        "title": "Sort Order",
+        "type": "string"
+      },
+      "sort_title_name": {
+        "anyOf": [{ "type": "string" }, { "type": "null" }],
+        "default": null,
+        "description": "When `sort_by=title_quantity`, provide title name, e.g. `maimai` or `sdvx`.",
+        "title": "Sort Title Name"
+      },
+      "page": {
+        "minimum": 1,
+        "title": "Page",
+        "type": "integer"
+      },
+      "page_size": {
+        "maximum": 50,
+        "minimum": 1,
+        "title": "Page Size",
+        "type": "integer"
+      },
+      "shop_id": {
+        "anyOf": [{ "type": "integer" }, { "type": "null" }],
+        "default": null,
+        "title": "Shop Id"
+      }
+    },
+    "required": ["page", "page_size"],
+    "title": "DBQueryArgs",
+    "type": "object"
+  }
+}

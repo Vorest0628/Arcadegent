@@ -9,12 +9,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from app.agent.tools.base import ToolDescriptor
 from app.agent.tools.mcp.client_manager import MCPClientManager
 from app.agent.tools.mcp.discovery import (
-    build_tool_definitions,
     discover_tools,
     infer_source_type,
-    local_tool_name,
     mask_url,
     pick_route_tool,
     short,
@@ -68,6 +67,10 @@ class MCPToolGateway:
         self._discovered_once = False
         self._client_manager = client_manager or MCPClientManager()
         self._dispatcher = dispatcher or MCPDispatcher(client_manager=self._client_manager)
+
+    @property
+    def provider_name(self) -> str:
+        return "mcp"
 
     @property
     def enabled(self) -> bool:
@@ -137,15 +140,53 @@ class MCPToolGateway:
         if self.enabled and not self._discovered_once:
             self.refresh()
 
-    def build_tool_definitions(self, *, allowed_tools: list[str], strict: bool) -> list[dict[str, Any]]:
+    def get_tools(self) -> dict[str, ToolDescriptor]:
         self.ensure_ready()
-        return build_tool_definitions(self._tools, allowed_tools=allowed_tools, strict=strict)
+        descriptors: dict[str, ToolDescriptor] = {}
+        for local_name, descriptor in self._tools.items():
+            descriptors[local_name] = ToolDescriptor(
+                name=descriptor.local_name,
+                description=descriptor.description,
+                provider=self.provider_name,
+                input_schema=descriptor.input_schema,
+                output_schema=descriptor.output_schema,
+                capabilities=("mcp", descriptor.server_name),
+            )
+        return descriptors
+
+    def build_tool_definitions(self, *, allowed_tools: list[str], strict: bool) -> list[dict[str, Any]]:
+        definitions: list[dict[str, Any]] = []
+        tools = self.get_tools()
+        allow_all_mcp = "mcp__*" in allowed_tools
+        for tool_name in sorted(tools):
+            if not (allow_all_mcp or tool_name in allowed_tools):
+                continue
+            descriptor = tools[tool_name]
+            definitions.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": descriptor.name,
+                        "description": descriptor.description,
+                        "parameters": descriptor.input_schema,
+                        "strict": strict,
+                    },
+                }
+            )
+        return definitions
 
     def has_tool(self, tool_name: str) -> bool:
         self.ensure_ready()
         return tool_name in self._tools
 
-    def execute(self, *, tool_name: str, raw_arguments: dict[str, Any]) -> MCPExecutionResult:
+    def execute(
+        self,
+        *,
+        tool_name: str,
+        raw_arguments: dict[str, Any],
+        validated_arguments: Any | None = None,
+    ) -> MCPExecutionResult:
+        _ = validated_arguments
         self.ensure_ready()
         descriptor = self._tools.get(tool_name)
         if descriptor is None:

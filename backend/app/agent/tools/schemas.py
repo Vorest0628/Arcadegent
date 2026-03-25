@@ -1,145 +1,165 @@
-"""Tool argument schemas and function definition builders."""
+"""JSON Schema helpers used by provider-backed tool registration."""
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from copy import deepcopy
+import json
+from pathlib import Path
+from typing import Any, Callable
 
-from pydantic import BaseModel, ConfigDict, Field
+from jsonschema import Draft202012Validator
 
+from app.agent.tools.base import ToolInputValidationError
 
-class _StrictModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-
-class LocationArgs(_StrictModel):
-    lng: float
-    lat: float
+_MISSING = object()
 
 
-class DBQueryArgs(_StrictModel):
-    keyword: str | None = Field(
-        default=None,
-        description="Search keyword, e.g. `maimai` or `广州 maimai`.",
-    )
-    province_code: str | None = Field(
-        default=None,
-        description="12-digit province code when available, e.g. `440000000000`.",
-    )
-    city_code: str | None = Field(
-        default=None,
-        description="12-digit city code when available, e.g. `440100000000`.",
-    )
-    county_code: str | None = Field(
-        default=None,
-        description="12-digit county code when available.",
-    )
-    province_name: str | None = Field(
-        default=None,
-        description="Province name when code is unavailable, e.g. `广东`.",
-    )
-    city_name: str | None = Field(
-        default=None,
-        description="City name when code is unavailable, e.g. `广州`.",
-    )
-    county_name: str | None = Field(
-        default=None,
-        description="County/district name when code is unavailable.",
-    )
-    has_arcades: bool | None = Field(
-        default=None,
-        description="Whether to require rows containing at least one title.",
-    )
-    sort_by: Literal["default", "updated_at", "source_id", "arcade_count", "title_quantity"] = Field(
-        default="default",
-        description=(
-            "Sort field. `title_quantity` sorts by machine `quantity`(qty) for one title; "
-            "`arcade_count` sorts by number of distinct title entries in one shop. "
-            "Use `default` to keep built-in deterministic order."
-        ),
-    )
-    sort_order: Literal["asc", "desc"] = Field(
-        default="desc",
-        description="Sort direction for `sort_by`.",
-    )
-    sort_title_name: str | None = Field(
-        default=None,
-        description="When `sort_by=title_quantity`, provide title name, e.g. `maimai` or `sdvx`.",
-    )
-    page: int = Field(ge=1)
-    page_size: int = Field(ge=1, le=50)
-    shop_id: int | None = None
+def load_json_schema(path: Path) -> dict[str, Any]:
+    """Load one tool schema/definition JSON file from disk."""
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"tool_schema_must_be_object:{path}")
+    return payload
 
 
-class GeoResolveArgs(_StrictModel):
-    province_code: str | None
+def build_json_schema_validator(
+    schema: dict[str, Any],
+    *,
+    source: str,
+) -> Callable[[dict[str, Any]], dict[str, Any]]:
+    """Create a validator that applies schema defaults before validating."""
+    validator = Draft202012Validator(schema)
 
-
-class RoutePlanArgs(_StrictModel):
-    provider: Literal["amap", "google", "none"]
-    mode: Literal["walking", "driving"]
-    origin: LocationArgs
-    destination: LocationArgs
-
-
-class SummaryArgs(_StrictModel):
-    topic: Literal["search", "navigation"]
-    keyword: str | None = None
-    total: int | None = None
-    shops: list[dict[str, Any]] | None = None
-    sort_by: Literal["default", "updated_at", "source_id", "arcade_count", "title_quantity"] | None = None
-    sort_order: Literal["asc", "desc"] | None = None
-    sort_title_name: str | None = None
-    shop_name: str | None = None
-    route: dict[str, Any] | None = None
-
-
-class SelectNextSubagentArgs(_StrictModel):
-    current_subagent: str
-    intent: str | None
-    tool_name: str | None
-    tool_status: Literal["completed", "failed"]
-    has_route: bool
-    has_shops: bool
-
-
-TOOL_ARG_MODELS: dict[str, type[_StrictModel]] = {
-    "db_query_tool": DBQueryArgs,
-    "geo_resolve_tool": GeoResolveArgs,
-    "route_plan_tool": RoutePlanArgs,
-    "summary_tool": SummaryArgs,
-    "select_next_subagent": SelectNextSubagentArgs,
-}
-
-TOOL_DESCRIPTIONS: dict[str, str] = {
-    "db_query_tool": (
-        "Search arcade shops by keyword and region. "
-        "Use *_code for 12-digit region codes, or *_name for natural-language region names. "
-        "Can also fetch one shop by shop_id. "
-        "Supports sorting via sort_by/sort_order/sort_title_name."
-    ),
-    "geo_resolve_tool": "Resolve map provider by province code.",
-    "route_plan_tool": "Plan a route from origin to destination.",
-    "summary_tool": "Format a deterministic text summary from structured search or navigation context.",
-    "select_next_subagent": "Emit a compatibility hint for next subagent candidate; runtime policy decides final route.",
-}
-
-
-def build_tool_definitions(tool_names: list[str], *, strict: bool) -> list[dict[str, Any]]:
-    """Build OpenAI-compatible function tool definitions."""
-    definitions: list[dict[str, Any]] = []
-    for name in tool_names:
-        model = TOOL_ARG_MODELS.get(name)
-        if model is None:
-            continue
-        definitions.append(
-            {
-                "type": "function",
-                "function": {
-                    "name": name,
-                    "description": TOOL_DESCRIPTIONS.get(name, name),
-                    "parameters": model.model_json_schema(),
-                    "strict": strict,
-                },
-            }
+    def validate(arguments: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(arguments, dict):
+            raise ToolInputValidationError(
+                message=f"{source}: tool arguments must be a JSON object",
+                details=[
+                    {
+                        "type": "type_error",
+                        "loc": [],
+                        "msg": "tool arguments must be a JSON object",
+                        "input": arguments,
+                    }
+                ],
+            )
+        normalized = _apply_defaults(schema=schema, value=arguments, root_schema=schema)
+        errors = sorted(
+            validator.iter_errors(normalized),
+            key=lambda item: [str(part) for part in item.absolute_path],
         )
-    return definitions
+        if not errors:
+            return normalized
+        raise ToolInputValidationError(
+            message=f"{source}: tool input does not satisfy declared JSON Schema",
+            details=[
+                {
+                    "type": "jsonschema_validation_error",
+                    "loc": list(error.absolute_path),
+                    "msg": error.message,
+                    "input": error.instance,
+                    "ctx": {
+                        "validator": error.validator,
+                        "validator_value": error.validator_value,
+                    },
+                }
+                for error in errors
+            ],
+        )
+
+    return validate
+
+
+def _apply_defaults(
+    *,
+    schema: dict[str, Any],
+    value: Any,
+    root_schema: dict[str, Any],
+) -> Any:
+    resolved = _resolve_schema(schema=schema, root_schema=root_schema)
+    branch = _pick_branch_schema(schema=resolved, value=value, root_schema=root_schema)
+
+    if value is _MISSING:
+        if "default" in branch:
+            return deepcopy(branch["default"])
+        return value
+
+    if isinstance(value, dict):
+        properties = branch.get("properties", {})
+        if isinstance(properties, dict):
+            normalized = dict(value)
+            for key, property_schema in properties.items():
+                child_value = normalized.get(key, _MISSING)
+                normalized_child = _apply_defaults(
+                    schema=property_schema,
+                    value=child_value,
+                    root_schema=root_schema,
+                )
+                if normalized_child is _MISSING:
+                    continue
+                normalized[key] = normalized_child
+            return normalized
+
+    if isinstance(value, list):
+        items_schema = branch.get("items")
+        if isinstance(items_schema, dict):
+            return [
+                _apply_defaults(schema=items_schema, value=item, root_schema=root_schema)
+                for item in value
+            ]
+    return value
+
+
+def _pick_branch_schema(
+    *,
+    schema: dict[str, Any],
+    value: Any,
+    root_schema: dict[str, Any],
+) -> dict[str, Any]:
+    for branch_key in ("anyOf", "oneOf"):
+        candidates = schema.get(branch_key)
+        if not isinstance(candidates, list):
+            continue
+        non_null_candidates = [
+            _resolve_schema(candidate, root_schema=root_schema)
+            for candidate in candidates
+            if not (isinstance(candidate, dict) and candidate.get("type") == "null")
+        ]
+        if value is _MISSING:
+            for candidate in non_null_candidates:
+                if "default" in candidate:
+                    return candidate
+            return schema
+        for candidate in non_null_candidates:
+            if Draft202012Validator(candidate).is_valid(value):
+                return candidate
+        return non_null_candidates[0] if non_null_candidates else schema
+    return schema
+
+
+def _resolve_schema(
+    schema: dict[str, Any],
+    *,
+    root_schema: dict[str, Any],
+) -> dict[str, Any]:
+    current = schema
+    visited: set[str] = set()
+    while isinstance(current, dict) and "$ref" in current:
+        ref = str(current["$ref"])
+        if ref in visited:
+            raise ValueError(f"cyclic_json_schema_ref:{ref}")
+        visited.add(ref)
+        current = _resolve_json_pointer(root_schema, ref)
+    return current if isinstance(current, dict) else schema
+
+
+def _resolve_json_pointer(root_schema: dict[str, Any], ref: str) -> Any:
+    if not ref.startswith("#/"):
+        raise ValueError(f"unsupported_json_schema_ref:{ref}")
+    current: Any = root_schema
+    for token in ref[2:].split("/"):
+        key = token.replace("~1", "/").replace("~0", "~")
+        if not isinstance(current, dict) or key not in current:
+            raise ValueError(f"unresolved_json_schema_ref:{ref}")
+        current = current[key]
+    return current

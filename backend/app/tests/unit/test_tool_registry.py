@@ -7,11 +7,7 @@ from pathlib import Path
 
 from fastmcp import FastMCP
 
-from app.agent.tools.builtin.db_query_tool import DBQueryTool
-from app.agent.tools.builtin.geo_resolve_tool import GeoResolveTool
-from app.agent.tools.builtin.route_plan_tool import RoutePlanTool
-from app.agent.tools.builtin.select_next_subagent_tool import SelectNextSubagentTool
-from app.agent.tools.builtin.summary_tool import SummaryTool
+from app.agent.tools.builtin import BuiltinToolProvider
 from app.agent.tools.mcp_gateway import MCPServerConfig, MCPToolGateway
 from app.agent.tools.permission import ToolPermissionChecker
 from app.agent.tools.registry import ToolRegistry
@@ -48,14 +44,18 @@ def _build_registry(
     data_path = tmp_path / "shops.jsonl"
     _write_rows(data_path)
     store = LocalArcadeStore.from_jsonl(data_path)
+    gateway = mcp_tool_gateway or MCPToolGateway()
     return ToolRegistry(
-        db_query_tool=DBQueryTool(store),
-        geo_resolve_tool=GeoResolveTool(),
-        route_plan_tool=RoutePlanTool(),
-        summary_tool=SummaryTool(),
-        select_next_subagent_tool=SelectNextSubagentTool(),
+        providers=[
+            BuiltinToolProvider(
+                runtime_services={
+                    "store": store,
+                    "mcp_tool_gateway": gateway,
+                }
+            ),
+            gateway,
+        ],
         permission_checker=ToolPermissionChecker(policy_file=tmp_path / "missing.yaml"),
-        mcp_tool_gateway=mcp_tool_gateway,
         strict_schema=True,
     )
 
@@ -192,12 +192,17 @@ def test_tool_registry_supports_title_quantity_sorting(tmp_path: Path) -> None:
             handle.write("\n")
 
     store = LocalArcadeStore.from_jsonl(data_path)
+    gateway = MCPToolGateway()
     registry = ToolRegistry(
-        db_query_tool=DBQueryTool(store),
-        geo_resolve_tool=GeoResolveTool(),
-        route_plan_tool=RoutePlanTool(),
-        summary_tool=SummaryTool(),
-        select_next_subagent_tool=SelectNextSubagentTool(),
+        providers=[
+            BuiltinToolProvider(
+                runtime_services={
+                    "store": store,
+                    "mcp_tool_gateway": gateway,
+                }
+            ),
+            gateway,
+        ],
         permission_checker=ToolPermissionChecker(policy_file=tmp_path / "missing.yaml"),
         strict_schema=True,
     )
@@ -247,12 +252,17 @@ def test_tool_registry_backfills_sort_title_name_from_keyword(tmp_path: Path) ->
             handle.write("\n")
 
     store = LocalArcadeStore.from_jsonl(data_path)
+    gateway = MCPToolGateway()
     registry = ToolRegistry(
-        db_query_tool=DBQueryTool(store),
-        geo_resolve_tool=GeoResolveTool(),
-        route_plan_tool=RoutePlanTool(),
-        summary_tool=SummaryTool(),
-        select_next_subagent_tool=SelectNextSubagentTool(),
+        providers=[
+            BuiltinToolProvider(
+                runtime_services={
+                    "store": store,
+                    "mcp_tool_gateway": gateway,
+                }
+            ),
+            gateway,
+        ],
         permission_checker=ToolPermissionChecker(policy_file=tmp_path / "missing.yaml"),
         strict_schema=True,
     )
@@ -287,6 +297,18 @@ def test_tool_registry_includes_discovered_mcp_tools_when_allowed(tmp_path: Path
 
     assert "route_plan_tool" in names
     assert "mcp__amap__maps_direction_walking" in names
+
+
+def test_tool_registry_gettools_aggregates_builtin_and_mcp_tools(tmp_path: Path) -> None:
+    registry = _build_registry(tmp_path, mcp_tool_gateway=_build_mcp_gateway())
+
+    tools = registry.gettools()
+
+    assert "db_query_tool" in tools
+    assert tools["db_query_tool"].provider == "builtin"
+    assert "mcp__amap__maps_direction_walking" in tools
+    assert tools["mcp__amap__maps_direction_walking"].provider == "mcp"
+    assert tools["summary_tool"].metadata["prompt"].endswith("response_composition.md")
 
 
 def test_tool_registry_can_execute_discovered_mcp_tool(tmp_path: Path) -> None:

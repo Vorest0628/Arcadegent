@@ -14,14 +14,10 @@ from app.agent.runtime.react_runtime import ReactRuntime
 from app.agent.runtime.session_state import SessionStateStore
 from app.agent.subagents.subagent_builder import SubAgentBuilder
 from app.agent.runtime.orchestrator import Orchestrator
+from app.agent.tools.builtin import BuiltinToolProvider
 from app.agent.tools.permission import ToolPermissionChecker
 from app.agent.tools.mcp_gateway import MCPToolGateway, build_amap_mcp_server_config
 from app.agent.tools.registry import ToolRegistry
-from app.agent.tools.builtin.db_query_tool import DBQueryTool
-from app.agent.tools.builtin.geo_resolve_tool import GeoResolveTool
-from app.agent.tools.builtin.route_plan_tool import AMapConfig, RoutePlanTool
-from app.agent.tools.builtin.select_next_subagent_tool import SelectNextSubagentTool
-from app.agent.tools.builtin.summary_tool import SummaryTool
 from app.core.config import Settings
 from app.infra.db.local_store import LocalArcadeStore
 from app.services.amap_reverse_geocoder import AMapReverseGeocoder, AMapReverseGeocoderConfig
@@ -45,15 +41,7 @@ def build_container(settings: Settings) -> AppContainer:
     """Construct runtime dependencies in one place."""
     store = LocalArcadeStore.from_jsonl(settings.data_jsonl_path)
     replay_buffer = ReplayBuffer(max_events_per_session=settings.replay_buffer_size)
-    db_query_tool = DBQueryTool(store)
     provider_adapter = ProviderAdapter(resolve_llm_config(settings))
-    route_tool = RoutePlanTool(
-        amap_config=AMapConfig(
-            api_key=settings.amap_api_key,
-            base_url=settings.amap_base_url,
-            timeout_seconds=settings.amap_timeout_seconds,
-        )
-    )
     reverse_geocoder = AMapReverseGeocoder(
         config=AMapReverseGeocoderConfig(
             api_key=settings.amap_api_key,
@@ -83,14 +71,17 @@ def build_container(settings: Settings) -> AppContainer:
             )
         ]
     )
+    builtin_tool_provider = BuiltinToolProvider(
+        runtime_services={
+            "store": store,
+            "settings": settings,
+            "mcp_tool_gateway": mcp_tool_gateway,
+            "project_root": project_root,
+        }
+    )
     tool_registry = ToolRegistry(
-        db_query_tool=db_query_tool,
-        geo_resolve_tool=GeoResolveTool(),
-        route_plan_tool=route_tool,
-        summary_tool=SummaryTool(),
-        select_next_subagent_tool=SelectNextSubagentTool(),
+        providers=[builtin_tool_provider, mcp_tool_gateway],
         permission_checker=permission_checker,
-        mcp_tool_gateway=mcp_tool_gateway,
         strict_schema=True,
     )
     session_store = SessionStateStore(storage_path=settings.chat_session_store_path)

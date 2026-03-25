@@ -10,10 +10,10 @@ logger = get_logger(__name__)
 
 def on_startup(container: AppContainer) -> None:
     stats = container.store.health()
-    container.tool_registry.refresh_mcp_tools()
-    mcp = container.tool_registry.mcp_health()
+    container.tool_registry.refresh_tools()
+    providers = container.tool_registry.provider_health()
     logger.info("Data store loaded: %s", stats)
-    logger.info("MCP status: %s", mcp)
+    logger.info("Tool provider status: %s", providers)
 
 
 def on_shutdown() -> None:
