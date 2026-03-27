@@ -31,6 +31,7 @@ scripts/
 .tmp_pytest_run/
 g:/
 .tmp
+output
 
-backend/app/tests/
-backend/app/tests/unit/
+
+tests
