@@ -10,7 +10,12 @@ from fastmcp.client.transports import StreamableHttpTransport
 from fastapi.testclient import TestClient
 import httpx
 
-from app.agent.tools.mcp import MCPServerConfig, MCPToolGateway, build_amap_mcp_server_config
+from app.agent.tools.mcp import (
+    MCPServerConfig,
+    MCPToolGateway,
+    build_amap_mcp_server_config,
+    build_mcp_server_configs,
+)
 
 
 def _build_http_transport(app: object, *, path: str = "/mcp") -> StreamableHttpTransport:
@@ -67,6 +72,59 @@ def test_build_amap_mcp_server_config_accepts_local_script(tmp_path: Path) -> No
     assert config.source == str(script_path)
     assert config.url == str(script_path)
     assert config.source_type == "script"
+
+
+def test_build_mcp_server_configs_accepts_standard_remote_json() -> None:
+    configs = build_mcp_server_configs(
+        raw_config={
+            "mcpServers": {
+                "fetch": {
+                    "type": "sse",
+                    "url": "https://mcp.api-inference.modelscope.net/",
+                    "headers": {"X-Token": "secret"},
+                }
+            }
+        },
+        default_timeout_seconds=7,
+    )
+
+    assert len(configs) == 1
+    config = configs[0]
+    assert config.name == "fetch"
+    assert config.enabled is True
+    assert config.url == "https://mcp.api-inference.modelscope.net/"
+    assert config.timeout_seconds == 7
+    assert config.source_type == "sse"
+    assert config.source["mcpServers"]["fetch"]["transport"] == "sse"
+
+
+def test_build_mcp_server_configs_accepts_standard_stdio_json() -> None:
+    configs = build_mcp_server_configs(
+        raw_config={
+            "mcpServers": {
+                "assistant": {
+                    "command": "python",
+                    "args": ["./assistant_server.py"],
+                    "env": {"LOG_LEVEL": "INFO"},
+                    "cwd": "/tmp",
+                    "enabled": False,
+                    "route_tool_name": "assistant_answer",
+                }
+            }
+        },
+        default_timeout_seconds=11,
+    )
+
+    assert len(configs) == 1
+    config = configs[0]
+    assert config.name == "assistant"
+    assert config.enabled is False
+    assert config.timeout_seconds == 11
+    assert config.route_tool_name == "assistant_answer"
+    assert config.source_type == "stdio"
+    assert config.source["mcpServers"]["assistant"]["command"] == "python"
+    assert config.source["mcpServers"]["assistant"]["args"] == ["./assistant_server.py"]
+    assert config.source["mcpServers"]["assistant"]["env"] == {"LOG_LEVEL": "INFO"}
 
 
 def test_mcp_gateway_discovers_and_executes_http_tools() -> None:

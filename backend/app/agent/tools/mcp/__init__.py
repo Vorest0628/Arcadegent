@@ -2,7 +2,11 @@
 
 from app.agent.tools.mcp.client_manager import MCPClientManager
 from app.agent.tools.mcp.dispatcher import MCPDispatcher
-from app.agent.tools.mcp.gateway import MCPToolGateway, build_amap_mcp_server_config
+from app.agent.tools.mcp.gateway import (
+    MCPToolGateway,
+    build_amap_mcp_server_config,
+    build_mcp_server_configs,
+)
 from app.agent.tools.mcp.models import (
     MCPExecutionResult,
     MCPServerConfig,
@@ -23,4 +27,5 @@ __all__ = [
     "MCP_TOOL_PREFIX",
     "MCP_TOOL_WILDCARD",
     "build_amap_mcp_server_config",
+    "build_mcp_server_configs",
 ]

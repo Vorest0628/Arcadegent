@@ -21,6 +21,12 @@ def test_settings_reads_llm_and_amap_env(monkeypatch) -> None:
     monkeypatch.setenv("AGENT_SUBAGENT_YAML_OVERLAY_ENABLED", "false")
     monkeypatch.setenv("AGENT_PROVIDER_PROFILES_FILE", "custom/provider_profiles.yaml")
     monkeypatch.setenv("AGENT_PROVIDER_PROFILE", "rule_based")
+    monkeypatch.setenv("MCP_DEFAULT_TIMEOUT_SECONDS", "15")
+    monkeypatch.setenv(
+        "MCP_SERVERS_JSON",
+        '{"mcpServers":{"fetch":{"type":"sse","url":"https://mcp.example.com"}}}',
+    )
+    monkeypatch.setenv("MCP_SERVERS_PATH", "custom/mcp.json")
     monkeypatch.setenv("MCP_AMAP_ENABLED", "true")
     monkeypatch.setenv("MCP_AMAP_BASE_URL", "https://mcp.amap.com/mcp")
     monkeypatch.setenv("MCP_AMAP_API_KEY", "mcp-key")
@@ -45,6 +51,9 @@ def test_settings_reads_llm_and_amap_env(monkeypatch) -> None:
     assert settings.agent_subagent_yaml_overlay_enabled is False
     assert settings.agent_provider_profiles_file == Path("custom/provider_profiles.yaml")
     assert settings.agent_provider_profile == "rule_based"
+    assert settings.mcp_default_timeout_seconds == 15
+    assert settings.mcp_servers_json == '{"mcpServers":{"fetch":{"type":"sse","url":"https://mcp.example.com"}}}'
+    assert settings.mcp_servers_path == Path("custom/mcp.json")
     assert settings.mcp_amap_enabled is True
     assert settings.mcp_amap_base_url == "https://mcp.amap.com/mcp"
     assert settings.mcp_amap_api_key == "mcp-key"

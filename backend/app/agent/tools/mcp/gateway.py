@@ -4,14 +4,16 @@ from __future__ import annotations
 
 # 基于 FastMCP 的发现和调度桥梁，用于运行时工具。
 # 总得来说属于一个工具网关，负责发现 MCP 工具并通过 FastMCP 客户端执行它们。
-# 是本模块下的核心类，提供了工具发现、工具定义构建、工具执行和路径规划等功能。
+# 是本模块下的核心类，提供了工具发现、工具定义构建、工具执行等功能。
 
+import json
 from pathlib import Path
 from typing import Any
 
 from app.agent.tools.base import ToolDescriptor
 from app.agent.tools.mcp.client_manager import MCPClientManager
 from app.agent.tools.mcp.discovery import (
+    coerce_str,
     discover_tools,
     infer_source_type,
     mask_url,
@@ -35,6 +37,136 @@ from app.infra.observability.logger import get_logger
 from app.protocol.messages import Location, RouteSummaryDto
 
 logger = get_logger(__name__)
+
+
+def _coerce_bool(value: Any, *, default: bool) -> bool:
+    """Coerce a value to boolean, accepting various common string and numeric representations, with a default fallback.
+    将一个值强制转换为布尔值，接受各种常见的字符串和数字表示，并提供默认回退。"""
+
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return default
+
+
+def _extract_timeout_seconds(
+    server_name: str,
+    payload: dict[str, Any],
+    *,
+    default_timeout_seconds: float,
+) -> float:
+    """Extract a timeout in seconds from the payload, accepting various common keys and formats, with a default fallback.
+    从负载中提取以秒为单位的超时，接受各种常见的键和格式，并提供默认回退。"""
+    for key in ("client_timeout_seconds", "clientTimeoutSeconds", "timeout_seconds", "timeoutSeconds"):
+        raw_value = payload.pop(key, None)
+        if raw_value is None:
+            continue
+        try:
+            return float(raw_value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"mcp server '{server_name}' has invalid {key}: {raw_value!r}") from exc
+
+    raw_timeout_ms = payload.get("timeout")
+    if raw_timeout_ms is None:
+        return default_timeout_seconds
+    try:
+        timeout_ms = float(raw_timeout_ms)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"mcp server '{server_name}' has invalid timeout milliseconds: {raw_timeout_ms!r}"
+        ) from exc
+    return timeout_ms / 1000.0
+
+
+def _extract_server_configs(raw_config: dict[str, Any]) -> dict[str, Any]:
+    """Extract server configurations from the raw MCP config, supporting both an explicit 'mcpServers' object and a root-level server mapping for backward compatibility.
+    从原始 MCP 配置中提取服务器配置，支持显式的 'mcpServers' 对象和根级服务器映射以保持向后兼容。"""
+    mcp_servers = raw_config.get("mcpServers")
+    if isinstance(mcp_servers, dict):
+        return mcp_servers
+
+    has_root_server_mapping = any(
+        isinstance(value, dict) and ("command" in value or "url" in value)
+        for value in raw_config.values()
+    )
+    if has_root_server_mapping:
+        return raw_config
+    raise ValueError("mcp config must contain an 'mcpServers' object or a root-level server mapping")
+
+
+def _normalize_server_payload(server_name: str, raw_payload: Any) -> dict[str, Any]:
+    if not isinstance(raw_payload, dict):
+        raise ValueError(f"mcp server '{server_name}' config must be an object")
+
+    payload = dict(raw_payload)
+    transport = coerce_str(payload.get("transport"))
+    transport_type = coerce_str(payload.get("type"))
+    if transport is None and transport_type in {"http", "streamable-http", "sse", "stdio"}:
+        payload["transport"] = transport_type
+    if "url" not in payload and "command" not in payload:
+        raise ValueError(f"mcp server '{server_name}' must define either 'url' or 'command'")
+    return payload
+
+
+def build_mcp_server_configs(
+    *,
+    raw_config: dict[str, Any] | None = None,
+    config_json: str = "",
+    config_path: str | Path | None = None,
+    default_timeout_seconds: float = 10.0,
+) -> list[MCPServerConfig]:
+    """Build runtime server configs from a standard MCP JSON object/string/file."""
+    if raw_config is None:
+        if config_json.strip():
+            raw_config = json.loads(config_json)
+        elif config_path is not None:
+            path = Path(config_path)
+            content = path.read_text(encoding="utf-8").strip()
+            if not content:
+                raise ValueError(f"mcp config file is empty: {path}")
+            raw_config = json.loads(content)
+        else:
+            return []
+
+    if not isinstance(raw_config, dict):
+        raise ValueError("mcp config must be a JSON object")
+
+    server_configs: list[MCPServerConfig] = []
+    for server_name, raw_payload in _extract_server_configs(raw_config).items():
+        name = str(server_name).strip()
+        if not name:
+            raise ValueError("mcp server name must not be empty")
+
+        payload = _normalize_server_payload(name, raw_payload)
+        enabled = _coerce_bool(payload.pop("enabled", True), default=True)
+        if "disabled" in payload:
+            enabled = not _coerce_bool(payload.pop("disabled"), default=False)
+        route_tool_name = coerce_str(payload.pop("route_tool_name", payload.pop("routeToolName", None)))
+        timeout_seconds = _extract_timeout_seconds(
+            name,
+            payload,
+            default_timeout_seconds=default_timeout_seconds,
+        )
+        source = {"mcpServers": {name: payload}}
+        server_configs.append(
+            MCPServerConfig(
+                name=name,
+                enabled=enabled,
+                source=source,
+                url=coerce_str(payload.get("url")),
+                timeout_seconds=timeout_seconds,
+                route_tool_name=route_tool_name,
+                source_type=infer_source_type(source),
+            )
+        )
+    return server_configs
 
 
 class MCPToolGateway:

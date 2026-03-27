@@ -16,7 +16,11 @@ from app.agent.subagents.subagent_builder import SubAgentBuilder
 from app.agent.runtime.orchestrator import Orchestrator
 from app.agent.tools.builtin import BuiltinToolProvider
 from app.agent.tools.permission import ToolPermissionChecker
-from app.agent.tools.mcp_gateway import MCPToolGateway, build_amap_mcp_server_config
+from app.agent.tools.mcp_gateway import (
+    MCPToolGateway,
+    build_amap_mcp_server_config,
+    build_mcp_server_configs,
+)
 from app.agent.tools.registry import ToolRegistry
 from app.core.config import Settings
 from app.infra.db.local_store import LocalArcadeStore
@@ -60,8 +64,14 @@ def build_container(settings: Settings) -> AppContainer:
         enable_yaml_overlay=settings.agent_subagent_yaml_overlay_enabled,
     )
     permission_checker = ToolPermissionChecker(policy_file=settings.agent_tool_policy_file)
-    mcp_tool_gateway = MCPToolGateway(
-        servers=[
+    mcp_servers = build_mcp_server_configs(
+        config_json=settings.mcp_servers_json,
+        config_path=settings.mcp_servers_path,
+        default_timeout_seconds=settings.mcp_default_timeout_seconds,
+    )
+    configured_server_names = {item.name for item in mcp_servers}
+    if settings.mcp_amap_enabled and "amap" not in configured_server_names:
+        mcp_servers.append(
             build_amap_mcp_server_config(
                 enabled=settings.mcp_amap_enabled,
                 base_url=settings.mcp_amap_base_url,
@@ -69,7 +79,9 @@ def build_container(settings: Settings) -> AppContainer:
                 timeout_seconds=settings.mcp_amap_timeout_seconds,
                 route_tool_name=settings.mcp_amap_route_tool_name or None,
             )
-        ]
+        )
+    mcp_tool_gateway = MCPToolGateway(
+        servers=mcp_servers
     )
     builtin_tool_provider = BuiltinToolProvider(
         runtime_services={

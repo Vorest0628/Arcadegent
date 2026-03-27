@@ -87,6 +87,9 @@ class Settings:
     agent_subagent_yaml_overlay_enabled: bool = True
     agent_provider_profiles_file: Path = Path("app/agent/nodes/profiles/provider_profiles.yaml")
     agent_provider_profile: str = "default"
+    mcp_default_timeout_seconds: float = 10.0
+    mcp_servers_json: str = ""
+    mcp_servers_path: Path | None = None
     mcp_amap_enabled: bool = False
     mcp_amap_base_url: str = "https://mcp.amap.com/mcp"
     mcp_amap_api_key: str = ""
@@ -162,6 +165,23 @@ class Settings:
             agent_provider_profile=os.getenv(
                 "AGENT_PROVIDER_PROFILE",
                 cls.agent_provider_profile,
+            ),
+            mcp_default_timeout_seconds=float(
+                os.getenv("MCP_DEFAULT_TIMEOUT_SECONDS", str(cls.mcp_default_timeout_seconds))
+            ),
+            mcp_servers_json=os.getenv(
+                "MCP_SERVERS_JSON",
+                os.getenv("MCP_CONFIG_JSON", cls.mcp_servers_json),
+            ),
+            mcp_servers_path=(
+                _resolve_path(raw_path)
+                if (
+                    raw_path := os.getenv(
+                        "MCP_SERVERS_PATH",
+                        os.getenv("MCP_CONFIG_PATH", ""),
+                    ).strip()
+                )
+                else None
             ),
             mcp_amap_enabled=_env_bool("MCP_AMAP_ENABLED", cls.mcp_amap_enabled),
             mcp_amap_base_url=os.getenv("MCP_AMAP_BASE_URL", cls.mcp_amap_base_url),

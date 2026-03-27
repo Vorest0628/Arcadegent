@@ -115,11 +115,26 @@ MCP_AMAP_API_KEY=
 
 - `ARCADE_DATA_JSONL` 是后端实际读取的数据源，默认指向 `data/raw/bemanicn/shops_detail.jsonl`。
 - 未配置 `LLM_API_KEY` 时服务仍可启动，但 Agent 对话会明显退化，联调前建议配置。
+- 现在也支持直接通过标准 `mcpServers` JSON 加载 MCP server，可用 `MCP_SERVERS_JSON` 或 `MCP_SERVERS_PATH` 提供配置。
 - `MCP_AMAP_ENABLED=true` 时，后端会启用 FastMCP Client 并在启动时探测高德 MCP tools。
 - `MCP_AMAP_ROUTE_TOOL_NAME` 可选。留空时后端会在启动时自动挑选 route tool；如果自动识别不准确，可以手动指定。
 - `AMAP_API_KEY` 会被 MCP 和 REST fallback 共同复用；只配这一项就可以。
 - `MCP_AMAP_API_KEY` 现在只是可选覆盖项。只有在你想让 MCP 和 REST 使用不同 key 时才需要单独填写。
 - 当前推荐路径是高德官方 `Streamable HTTP` MCP endpoint，不需要额外安装 Node.js MCP server。
+- 如果标准 JSON 里已经定义了同名 `amap` server，容器会优先使用 JSON 配置，不再额外追加 legacy 的 `MCP_AMAP_*` 配置。
+
+标准 MCP JSON 配置示例：
+
+```dotenv
+MCP_SERVERS_JSON={"mcpServers":{"fetch":{"type":"sse","url":"https://mcp.api-inference.modelscope.net/"},"assistant":{"command":"python","args":["./assistant_server.py"],"env":{"LOG_LEVEL":"INFO"}}}}
+MCP_DEFAULT_TIMEOUT_SECONDS=10
+```
+
+也可以把同样内容写到一个 JSON 文件里，再通过：
+
+```dotenv
+MCP_SERVERS_PATH=./config/mcp.json
+```
 
 ### 4. 启动后端 API
 

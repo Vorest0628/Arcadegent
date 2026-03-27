@@ -32,6 +32,6 @@ scripts/
 g:/
 .tmp
 output
-
+.DS_Store
 
 tests

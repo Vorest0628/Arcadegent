@@ -9,7 +9,7 @@ from __future__ import annotations
 # - `short()`: 将文本压缩成单行，并限制长度。
 # - `coerce_str()`: 将任意值转换为字符串，如果不是字符串或者是空字符串，则返回 None。
 # - `local_tool_name()`: 根据服务器名称和远程工具名称生成本地工具名称。
-# - `infer_source_type()`: 根据工具的 source 属性推断工具的类型。
+# - `infer_source_type()`: 根据工具的 source 属性推断工具的类型，处理不同格式的 source 输入，包括mcp服务器配置。
 # - `with_query_param()`: 在 URL 中添加查询参数。
 # - `mask_url()`: 对 URL 中的敏感信息进行掩码处理。
 # - `discover_tools()`: 从原始工具列表中提取工具描述符。
@@ -62,6 +62,20 @@ def infer_source_type(source: Any) -> str:
             return "script"
         return "string"
     if isinstance(source, dict):
+        if "command" in source:
+            return "stdio"
+        if "url" in source:
+            transport = coerce_str(source.get("transport") or source.get("type"))
+            return transport or "http"
+        mcp_servers = source.get("mcpServers")
+        if isinstance(mcp_servers, dict) and len(mcp_servers) == 1:
+            only_server = next(iter(mcp_servers.values()))
+            if isinstance(only_server, dict):
+                if "command" in only_server:
+                    return "stdio"
+                if "url" in only_server:
+                    transport = coerce_str(only_server.get("transport") or only_server.get("type"))
+                    return transport or "http"
         return "config"
     return type(source).__name__.lower()
 
